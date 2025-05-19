@@ -27,8 +27,11 @@
 #include "impl/odescent_graph_builder.h"
 #include "impl/pruning_strategy.h"
 #include "index/iterator_filter.h"
+#include "serialization.h"
+#include "stream_reader.h"
 #include "utils/standard_heap.h"
 #include "utils/util_functions.h"
+#include "vsag/options.h"
 
 namespace vsag {
 
@@ -644,10 +647,28 @@ HGraph::Serialize(StreamWriter& writer) const {
     if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
         this->extra_infos_->Serialize(writer);
     }
+
+    // serialize footer (introduce in new version)
+    if (Options::Instance().new_version()) {
+        auto footer = std::make_shared<Footer>();
+        footer->Write(writer);
+    }
 }
 
 void
 HGraph::Deserialize(StreamReader& reader) {
+    // try to deserialize footer (only in new version)
+    if (1) {
+        reader.PushSeek(reader.Length() - 8);
+        char buffer[8];
+        reader.Read(buffer, 8);
+        if (std::string(buffer) == "abcdefgh") {
+            std::cout << "new version" << std::endl;
+        }
+        reader.PopSeek();
+    }
+
+    // original procedure
     this->deserialize_basic_info(reader);
     this->basic_flatten_codes_->Deserialize(reader);
     this->bottom_graph_->Deserialize(reader);
