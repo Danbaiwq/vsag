@@ -76,4 +76,10 @@ next_multiple_of_power_of_two(uint64_t x, uint64_t n);
 bool
 check_equal_on_string_stream(std::stringstream& s1, std::stringstream& s2);
 
+std::string
+base64_encode(const std::string& in);
+
+std::string
+base64_decode(const std::string& in);
+
 }  // namespace vsag
