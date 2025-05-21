@@ -85,10 +85,11 @@ public:
     Parse(StreamReader& reader) {
         // check cigam
         reader.PushSeek(reader.Length() - 8);
-        char cigam[8];
+        char cigam[9] = {};
         reader.Read(cigam, 8);
         logger::debug("deserial cigam: {}", cigam);
         if (strcmp(cigam, SERIAL_MAGIC_END) != 0) {
+            reader.PopSeek();
             return nullptr;
         }
         reader.PopSeek();
@@ -99,16 +100,18 @@ public:
         StreamReader::ReadObj(reader, length);
         logger::debug("deserial length: {}", length);
         if (length > reader.Length()) {
+            reader.PopSeek();
             return nullptr;
         }
         reader.PopSeek();
 
         // check magic
         reader.PushSeek(reader.Length() - length);
-        char magic[8];
+        char magic[9] = {};
         reader.Read(magic, 8);
         logger::debug("deserial magic: {}", magic);
         if (strcmp(magic, SERIAL_MAGIC_BEGIN) != 0) {
+            reader.PopSeek();
             return nullptr;
         }
         // no popseek, continue to parse
@@ -116,8 +119,9 @@ public:
         auto metadata_string = StreamReader::ReadString(reader);
         uint32_t checksum;
         StreamReader::ReadObj(reader, checksum);
-        logger::debug("deserial checksum: {}", checksum);
+        logger::debug("deserial checksum: 0x{:x}", checksum);
         if (calculate_checksum(metadata_string) != checksum) {
+            reader.PopSeek();
             return nullptr;
         }
         reader.PopSeek();

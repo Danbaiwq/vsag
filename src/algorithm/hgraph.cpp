@@ -27,6 +27,7 @@
 #include "impl/odescent_graph_builder.h"
 #include "impl/pruning_strategy.h"
 #include "index/iterator_filter.h"
+#include "logger.h"
 #include "serialization.h"
 #include "stream_reader.h"
 #include "typing.h"
@@ -661,10 +662,13 @@ HGraph::deserialize_basic_info_v0_14(StreamReader& reader) {
 }
 
 #define TO_JSON(json_obj, var) \
-    json_obj["var"] = this->var##_;
+    json_obj[#var] = this->var##_;
+
+#define TO_JSON_BASE64(json_obj, var) \
+    json_obj[#var] = base64_encode_obj(this->var##_);
 
 #define TO_JSON_ATOMIC(json_obj, var) \
-    json_obj["var"] = this->var##_.load();
+    json_obj[#var] = this->var##_.load();
 
 JsonType
 HGraph::serialize_basic_info() const {
@@ -674,7 +678,8 @@ HGraph::serialize_basic_info() const {
     TO_JSON(jsonify_basic_info, metric);
     TO_JSON(jsonify_basic_info, entry_point_id);
     TO_JSON(jsonify_basic_info, ef_construct);
-    TO_JSON(jsonify_basic_info, mult);
+    // logger::debug("mult: {}", this->mult_);
+    TO_JSON_BASE64(jsonify_basic_info, mult);
     TO_JSON_ATOMIC(jsonify_basic_info, max_capacity);
     jsonify_basic_info["max_level"] = this->route_graphs_.size();
 
@@ -682,10 +687,13 @@ HGraph::serialize_basic_info() const {
 }
 
 #define FROM_JSON(json_obj, var) \
-    this->var##_ = (json_obj)["var"];
+    this->var##_ = (json_obj)[#var];
+
+#define FROM_JSON_BASE64(json_obj, var) \
+    base64_decode_obj((json_obj)[#var], this->var##_);
 
 #define FROM_JSON_ATOMIC(json_obj, var) \
-    this->var##_.store((json_obj)["var"]);
+    this->var##_.store((json_obj)[#var]);
 
 void
 HGraph::deserialize_basic_info(JsonType jsonify_basic_info) {
@@ -694,8 +702,10 @@ HGraph::deserialize_basic_info(JsonType jsonify_basic_info) {
     FROM_JSON(jsonify_basic_info, metric);
     FROM_JSON(jsonify_basic_info, entry_point_id);
     FROM_JSON(jsonify_basic_info, ef_construct);
-    FROM_JSON(jsonify_basic_info, mult);
+    FROM_JSON_BASE64(jsonify_basic_info, mult);
+    // logger::debug("mult: {}", this->mult_);
     FROM_JSON_ATOMIC(jsonify_basic_info, max_capacity);
+
     uint64_t max_level = jsonify_basic_info["max_level"];
     for (uint64_t i = 0; i < max_level; ++i) {
         this->route_graphs_.emplace_back(this->generate_one_route_graph());
@@ -735,8 +745,12 @@ HGraph::Serialize(StreamWriter& writer) const {
     }
 
     // basic info moved to metadata since version 0.15
-    // this->serialize_basic_info_v0_14(writer);
-    this->serialize_label_info(writer);
+    // only for test
+    if (Options::Instance().new_version()) {
+        this->serialize_label_info(writer);
+    } else {
+        this->serialize_basic_info_v0_14(writer);
+    }
 
     this->basic_flatten_codes_->Serialize(writer);
     this->bottom_graph_->Serialize(writer);
@@ -766,11 +780,12 @@ HGraph::Deserialize(StreamReader& reader) {
     // try to deserialize footer (only in new version)
     auto footer = Footer::Parse(reader);
     if (footer != nullptr) {
-        logger::debug("new version format");
+        logger::debug("parse with new version format");
         auto metadata = footer->GetMetadata();
         this->deserialize_basic_info(metadata->Get("basic_info"));
         this->deserialize_label_info(reader);
     } else {
+        logger::debug("parse with v0.14 version format");
         this->deserialize_basic_info_v0_14(reader);
     }
 

@@ -97,7 +97,6 @@ main(int32_t argc, char** argv) {
         index = *create_index;
     }
 
-    vsag::Options::Instance().set_new_version(false);
     std::ifstream in_stream("/tmp/vsag-persistent-streaming.index");
     if (auto deserialize = index->Deserialize(in_stream); not deserialize.has_value()) {
         std::cerr << "load index failed: " << deserialize.error().message << std::endl;
