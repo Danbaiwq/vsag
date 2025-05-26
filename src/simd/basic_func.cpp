@@ -68,6 +68,7 @@ GetInnerProduct() {
 #if defined(ENABLE_NEON)
         return neon::InnerProduct;
 #endif
+    }
     return generic::InnerProduct;
 }
 DistanceFuncType InnerProduct = GetInnerProduct();
@@ -94,6 +95,7 @@ GetInnerProductDistance() {
 #if defined(ENABLE_NEON)
         return neon::InnerProductDistance;
 #endif
+    }
     return generic::InnerProductDistance;
 }
 DistanceFuncType InnerProductDistance = GetInnerProductDistance();
@@ -120,6 +122,7 @@ GetINT8InnerProduct() {
 #if defined(ENABLE_NEON)
         return neon::INT8InnerProduct;
 #endif
+    }
     return generic::INT8InnerProduct;
 }
 DistanceFuncType INT8InnerProduct = GetINT8InnerProduct();
@@ -146,6 +149,7 @@ GetINT8InnerProductDistance() {
 #if defined(ENABLE_NEON)
         return neon::INT8InnerProductDistance;
 #endif
+    }
     return generic::INT8InnerProductDistance;
 }
 DistanceFuncType INT8InnerProductDistance = GetINT8InnerProductDistance();
@@ -172,6 +176,7 @@ GetPQDistanceFloat256() {
 #if defined(ENABLE_NEON)
         return neon::PQDistanceFloat256;
 #endif
+    }
     return generic::PQDistanceFloat256;
 }
 PQDistanceFuncType PQDistanceFloat256 = GetPQDistanceFloat256();

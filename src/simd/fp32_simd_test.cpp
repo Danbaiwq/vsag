@@ -25,7 +25,7 @@ using namespace vsag;
 
 #define TEST_FP32_COMPUTE_ACCURACY(Func)                                              \
     {                                                                                 \
-        float gt, sse, avx, avx2, avx512;                                             \
+        float gt, sse, avx, avx2, avx512, neon;                                       \
         gt = generic::Func(vec1.data() + i * dim, vec2.data() + i * dim, dim);        \
         if (SimdStatus::SupportSSE()) {                                               \
             sse = sse::Func(vec1.data() + i * dim, vec2.data() + i * dim, dim);       \

@@ -25,7 +25,7 @@ using namespace vsag;
 
 #define TEST_ACCURACY_FP32(Func)                                 \
     {                                                            \
-        float generic, sse, avx, avx2, avx512;                   \
+        float generic, sse, avx, avx2, avx512, neon;             \
         generic = generic::Func(query, base, dim, inv_sqrt_d);   \
         REQUIRE(std::abs(gt - generic) < 1e-4);                  \
         if (SimdStatus::SupportSSE()) {                          \

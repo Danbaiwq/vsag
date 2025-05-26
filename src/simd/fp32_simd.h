@@ -202,6 +202,8 @@ FP32ComputeL2SqrBatch4(const float* query,
                        float& result2,
                        float& result3,
                        float& result4);
+void
+FP32Sub(const float* x, const float* y, float* z, uint64_t dim);
 } // namespace neon
 
 using FP32ComputeType = float (*)(const float* query, const float* codes, uint64_t dim);

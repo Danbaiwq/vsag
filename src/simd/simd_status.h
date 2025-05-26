@@ -31,6 +31,7 @@ public:
     bool dist_support_avx512dq = false;
     bool dist_support_avx512bw = false;
     bool dist_support_avx512vl = false;
+    bool dist_support_neon = false;
     bool runtime_has_sse = false;
     bool runtime_has_avx = false;
     bool runtime_has_avx2 = false;
