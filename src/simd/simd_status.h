@@ -38,6 +38,7 @@ public:
     bool runtime_has_avx512dq = false;
     bool runtime_has_avx512bw = false;
     bool runtime_has_avx512vl = false;
+    bool runtime_has_neon = false;
 
     static bool is_inited;
 
@@ -93,6 +94,16 @@ public:
         ret &= cpuinfo_has_x86_sse();
         return ret;
     }
+    
+    static inline bool
+    SupportNEON() {
+        bool ret = false;
+#if defined(ENABLE_NEON)
+        ret = true;
+#endif
+        ret &= cpuinfo_has_arm_neon();
+        return ret;
+    }
 
     [[nodiscard]] std::string
     sse() const {
@@ -127,6 +138,11 @@ public:
     [[nodiscard]] std::string
     avx512vl() const {
         return status_to_string(dist_support_avx512vl, runtime_has_avx512vl);
+    }
+
+    [[nodiscard]] std::string
+    neon() const {
+        return status_to_string(dist_support_neon, runtime_has_neon);
     }
 
     static std::string
