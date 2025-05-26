@@ -299,10 +299,10 @@ FP32ComputeIPBatch4(const float* query,
         sum4 = vaddq_f32(sum4, vmulq_f32(q, c4));
     }
 
-    result1 = vaddvq_f32(sum1);
-    result2 = vaddvq_f32(sum2);
-    result3 = vaddvq_f32(sum3);
-    result4 = vaddvq_f32(sum4);
+    result1 += vaddvq_f32(sum1);
+    result2 += vaddvq_f32(sum2);
+    result3 += vaddvq_f32(sum3);
+    result4 += vaddvq_f32(sum4);
 
     if (i < dim) {
         generic::FP32ComputeIPBatch4(query + i,
@@ -359,10 +359,10 @@ FP32ComputeL2SqrBatch4(const float* query,
         sum4 = vaddq_f32(sum4, vmulq_f32(diff4, diff4));
     }
 
-    result1 = vaddvq_f32(sum1);
-    result2 = vaddvq_f32(sum2);
-    result3 = vaddvq_f32(sum3);
-    result4 = vaddvq_f32(sum4);
+    result1 += vaddvq_f32(sum1);
+    result2 += vaddvq_f32(sum2);
+    result3 += vaddvq_f32(sum3);
+    result4 += vaddvq_f32(sum4);
 
     if (i < dim) {
         generic::FP32ComputeL2SqrBatch4(query + i,
@@ -1081,14 +1081,6 @@ Normalize(const float* from, float* to, uint64_t dim) {
     neon::DivScalar(from, to, dim, norm);
     return norm;
 }
-
-void
-Prefetch(const void* data) {
-// aarch64:_prefetch(ptr, R/W, locality): neglect realizing.
-#if defined(ENABLE_SSE)
-    _mm_prefetch(data, _MM_HINT_T0);
-#endif
-};
 
 #if defined(ENABLE_NEON)
 __inline uint16x8_t __attribute__((__always_inline__)) shuffle_16_char(const uint8x16_t* a, const uint8x16_t* b) {
