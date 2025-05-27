@@ -50,7 +50,7 @@ InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr
 
 float
 INT8InnerProduct(const void* pVect1v, const void* pVect2v, const void* qty_ptr) {
-    return generic::INT8InnerProduct(pVect1v, pVect2v, qty_ptr); 
+    return generic::INT8InnerProduct(pVect1v, pVect2v, qty_ptr);
 }
 
 float
@@ -92,13 +92,12 @@ __inline float32x4_t __attribute__((__always_inline__)) vcvt_f32_half(const uint
     return vreinterpretq_f32_u32(vshlq_n_u32(vmovl_u16(x), 16));
 }
 
-
 #endif
 
 // calculate the dist between each pq kmeans centers and corresponding pq query dim value.
 void
 PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* result) {
-#if defined (ENABLE_NEON)
+#if defined(ENABLE_NEON)
     const auto* float_centers = (const float*)single_dim_centers;
     auto* float_result = (float*)result;
     for (size_t idx = 0; idx < 256; idx += 8) {
@@ -125,7 +124,7 @@ PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* r
 
 float
 FP32ComputeIP(const float* query, const float* codes, uint64_t dim) {
-#if defined (ENABLE_NEON)
+#if defined(ENABLE_NEON)
     float32x4_t sum_ = vdupq_n_f32(0.0f);
     auto d = dim;
     while (d >= 12) {
@@ -191,7 +190,7 @@ FP32ComputeIP(const float* query, const float* codes, uint64_t dim) {
 
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim) {
-#if defined (ENABLE_NEON)
+#if defined(ENABLE_NEON)
     float32x4_t sum_ = vdupq_n_f32(0.0f);
     auto d = dim;
     while (d >= 12) {
@@ -403,15 +402,12 @@ FP32Sub(const float* x, const float* y, float* z, uint64_t dim) {
 #endif
 }
 
-
-
 #if defined(ENABLE_NEON)
 __inline uint16x8_t __attribute__((__always_inline__)) load_4_short(const uint16_t* data) {
     uint16_t tmp[] = {data[3], 0, data[2], 0, data[1], 0, data[0], 0};
     return vld1q_u16(tmp);
 }
 #endif
-
 
 float
 BF16ComputeIP(const uint8_t* query, const uint8_t* codes, uint64_t dim) {
@@ -561,7 +557,7 @@ BF16ComputeL2Sqr(const uint8_t* query, const uint8_t* codes, uint64_t dim) {
 
 float
 FP16ComputeIP(const uint8_t* query, const uint8_t* codes, uint64_t dim) {
-#if defined (ENABLE_NEON)
+#if defined(ENABLE_NEON)
     const auto* query_fp16 = (const uint16_t*)(query);
     const auto* codes_fp16 = (const uint16_t*)(codes);
 
@@ -623,16 +619,16 @@ FP16ComputeIP(const uint8_t* query, const uint8_t* codes, uint64_t dim) {
         res.val[0] = vmlaq_f32(res.val[0], vcvt_f32_f16(res_x), vcvt_f32_f16(res_y));
     }
     return vaddvq_f32(res.val[0]);
-# else
+#else
     return generic::FP16ComputeIP(query, codes, dim);
 #endif
 }
 
 float
 FP16ComputeL2Sqr(const uint8_t* query, const uint8_t* codes, uint64_t dim) {
-#if defined (ENABLE_NEON)
+#if defined(ENABLE_NEON)
     float32x4x3_t res = {vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f)};
-   
+
     const auto* query_fp16 = (const uint16_t*)(query);
     const auto* codes_fp16 = (const uint16_t*)(codes);
 
@@ -719,7 +715,7 @@ __inline float32x4_t __attribute__((__always_inline__)) get_4_float(uint8x16_t* 
     uint8x8_t code_low = vget_low_u8(*code_vec);
     uint16x8_t code_low_16 = vmovl_u8(code_low);
     uint16x4_t code_low_16_low = vget_low_u16(code_low_16);
-    uint32x4_t code_values = vmovl_u16(code_low_16_low); 
+    uint32x4_t code_values = vmovl_u16(code_low_16_low);
     float32x4_t code_floats = vcvtq_f32_u32(code_values);
     return code_floats;
 }
@@ -763,7 +759,7 @@ SQ8ComputeIP(const float* query,
     }
 
     return vaddvq_f32(sum_) +
-        generic::SQ8ComputeIP(query + i, codes + i, lower_bound + i, diff + i, dim - i);
+           generic::SQ8ComputeIP(query + i, codes + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeIP(query, codes, lower_bound, diff, dim);
 #endif
@@ -796,7 +792,8 @@ SQ8ComputeL2Sqr(const float* query,
         sum = vaddq_f32(sum, val);
     }
 
-    return vaddvq_f32(sum) + generic::SQ8ComputeL2Sqr(query + i, codes + i, lower_bound + i, diff + i, dim - i);
+    return vaddvq_f32(sum) +
+           generic::SQ8ComputeL2Sqr(query + i, codes + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeL2Sqr(query, codes, lower_bound, diff, dim);
 #endif
@@ -824,14 +821,17 @@ SQ8ComputeCodesIP(const uint8_t* codes1,
 
         float32x4_t diff_values = vld1q_f32(diff + i);
         float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
-        
-        float32x4_t scaled_codes1 = vaddq_f32(vmulq_f32(code1_floats, diff_values), lower_bound_values);
-        float32x4_t scaled_codes2 = vaddq_f32(vmulq_f32(code2_floats, diff_values), lower_bound_values);
+
+        float32x4_t scaled_codes1 =
+            vaddq_f32(vmulq_f32(code1_floats, diff_values), lower_bound_values);
+        float32x4_t scaled_codes2 =
+            vaddq_f32(vmulq_f32(code2_floats, diff_values), lower_bound_values);
         float32x4_t val = vmulq_f32(scaled_codes1, scaled_codes2);
         sum = vaddq_f32(sum, val);
     }
 
-    return vaddvq_f32(sum) + generic::SQ8ComputeCodesIP(codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
+    return vaddvq_f32(sum) +
+           generic::SQ8ComputeCodesIP(codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -862,13 +862,16 @@ SQ8ComputeCodesL2Sqr(const uint8_t* codes1,
         float32x4_t diff_values = vld1q_f32(diff + i);
         float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
 
-        float32x4_t scaled_codes1 = vaddq_f32(vmulq_f32(code1_floats, diff_values), lower_bound_values);
-        float32x4_t scaled_codes2 = vaddq_f32(vmulq_f32(code2_floats, diff_values), lower_bound_values);
+        float32x4_t scaled_codes1 =
+            vaddq_f32(vmulq_f32(code1_floats, diff_values), lower_bound_values);
+        float32x4_t scaled_codes2 =
+            vaddq_f32(vmulq_f32(code2_floats, diff_values), lower_bound_values);
         float32x4_t val = vsubq_f32(scaled_codes1, scaled_codes2);
         val = vmulq_f32(val, val);
         sum = vaddq_f32(sum, val);
     }
-    return vaddvq_f32(sum) + generic::SQ8ComputeCodesL2Sqr(codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
+    return vaddvq_f32(sum) + generic::SQ8ComputeCodesL2Sqr(
+                                 codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -913,7 +916,7 @@ SQ4ComputeCodesL2Sqr(const uint8_t* codes1,
 float
 SQ4UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t dim) {
 #if defined(ENABLE_NEON)
-    uint16x8_t sum_ = vdupq_n_u16(0); 
+    uint16x8_t sum_ = vdupq_n_u16(0);
 
     while (dim >= 32) {
         // get (2*4)bit * (16)
@@ -921,7 +924,7 @@ SQ4UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t 
         uint8x16_t b = vld1q_u8(codes2);
         uint8x16_t mask = vdupq_n_u8(0x0f);
 
-        // get 4bit * 16 
+        // get 4bit * 16
         uint8x16_t a_low = vandq_u8(a, mask);
         uint8x16_t a_high = vandq_u8(vshrq_n_u8(a, 4), mask);
         uint8x16_t b_low = vandq_u8(b, mask);
@@ -1060,8 +1063,10 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
 void
 DivScalar(const float* from, float* to, uint64_t dim, float scalar) {
 #if defined(ENABLE_NEON)
-    if (dim == 0) return;
-    if (scalar == 0) scalar = 1.0f;
+    if (dim == 0)
+        return;
+    if (scalar == 0)
+        scalar = 1.0f;
     int i = 0;
     float32x4_t scalarVec = vdupq_n_f32(scalar);
     for (; i + 3 < dim; i += 4) {
@@ -1083,15 +1088,15 @@ Normalize(const float* from, float* to, uint64_t dim) {
 }
 
 #if defined(ENABLE_NEON)
-__inline uint16x8_t __attribute__((__always_inline__)) shuffle_16_char(const uint8x16_t* a, const uint8x16_t* b) {
+__inline uint16x8_t __attribute__((__always_inline__))
+shuffle_16_char(const uint8x16_t* a, const uint8x16_t* b) {
     int8x16_t tbl = vreinterpretq_s8_u8(*a);
     uint8x16_t idx = *b;
     uint8x16_t idx_masked = vandq_u8(idx, vdupq_n_u8(0x8F));  // avoid using meaningless bits
-    
+
     return vreinterpretq_u16_s8(vqtbl1q_s8(tbl, idx_masked));
 }
 #endif
-
 
 void
 PQFastScanLookUp32(const uint8_t* lookup_table,
@@ -1100,7 +1105,7 @@ PQFastScanLookUp32(const uint8_t* lookup_table,
                    int32_t* result) {
 #if defined(ENABLE_NEON)
     uint32x4_t sum[4];
-    for (size_t i = 0 ; i < 4; ++i) {
+    for (size_t i = 0; i < 4; ++i) {
         sum[i] = vdupq_n_u32(0);
     }
     const auto sign4 = vdupq_n_u8(0x0F);
@@ -1111,7 +1116,7 @@ PQFastScanLookUp32(const uint8_t* lookup_table,
         auto code = vld1q_u8(codes);
         lookup_table += 16;
         codes += 16;
-        
+
         auto code1 = vandq_u8(code, sign4);
         auto code2 = vandq_u8(vshrq_n_u8(code, 4), sign4);
         auto res1 = shuffle_16_char(&dict, &code1);
@@ -1133,5 +1138,4 @@ PQFastScanLookUp32(const uint8_t* lookup_table,
 #endif
 }
 
-
-} // namespace vasg::neon
+}  // namespace vsag::neon

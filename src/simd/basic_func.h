@@ -111,7 +111,7 @@ float
 INT8InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
 void
 PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* result);
-} // namespace neon
+}  // namespace neon
 
 using DistanceFuncType = float (*)(const void* query1, const void* query2, const void* qty_ptr);
 extern DistanceFuncType L2Sqr;

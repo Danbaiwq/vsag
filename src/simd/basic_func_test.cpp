@@ -25,7 +25,7 @@ using namespace vsag;
 
 #define TEST_ACCURACY(Func)                                                            \
     {                                                                                  \
-        float gt, sse, avx, avx2, avx512, neon;                                              \
+        float gt, sse, avx, avx2, avx512, neon;                                        \
         gt = generic::Func(vec1.data() + i * dim, vec2.data() + i * dim, &dim);        \
         if (SimdStatus::SupportSSE()) {                                                \
             sse = sse::Func(vec1.data() + i * dim, vec2.data() + i * dim, &dim);       \

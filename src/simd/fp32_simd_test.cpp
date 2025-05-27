@@ -179,15 +179,15 @@ using namespace vsag;
         if (SimdStatus::SupportNEON()) {                                                 \
             memset(result.data(), 0, 4 * sizeof(float));                                 \
             neon::FuncBatch4(vec1.data() + i * dim,                                      \
-                               dim,                                                      \
-                               vec2.data() + i * dim,                                    \
-                               vec2.data() + (i + 1) * dim,                              \
-                               vec2.data() + (i + 2) * dim,                              \
-                               vec2.data() + (i + 3) * dim,                              \
-                               result[0],                                                \
-                               result[1],                                                \
-                               result[2],                                                \
-                               result[3]);                                               \
+                             dim,                                                        \
+                             vec2.data() + i * dim,                                      \
+                             vec2.data() + (i + 1) * dim,                                \
+                             vec2.data() + (i + 2) * dim,                                \
+                             vec2.data() + (i + 3) * dim,                                \
+                             result[0],                                                  \
+                             result[1],                                                  \
+                             result[2],                                                  \
+                             result[3]);                                                 \
             for (uint64_t j = 0; j < 4; ++j) {                                           \
                 REQUIRE(fixtures::dist_t(gts[j]) == fixtures::dist_t(result[j]));        \
             }                                                                            \

@@ -65,8 +65,7 @@ TEST_CASE("Normalize Compute", "[ut][simd]") {
                 }
             }
             if (SimdStatus::SupportNEON()) {
-                auto neon =
-                    neon::Normalize(vec1.data() + i * dim, tmp_value.data() + dim * 3, dim);
+                auto neon = neon::Normalize(vec1.data() + i * dim, tmp_value.data() + dim * 3, dim);
                 REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(neon));
                 for (int j = 0; j < dim; ++j) {
                     REQUIRE(fixtures::dist_t(tmp_value[j]) ==

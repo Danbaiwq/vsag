@@ -50,10 +50,10 @@ using namespace vsag;
                                    diff.data(),                    \
                                    dim);                           \
         auto neon = neon::Func(codes1.data() + i * code_size,      \
-                                   codes2.data() + i * code_size,  \
-                                   lb.data(),                      \
-                                   diff.data(),                    \
-                                   dim);                           \
+                               codes2.data() + i * code_size,      \
+                               lb.data(),                          \
+                               diff.data(),                        \
+                               dim);                               \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sse));    \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx));    \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx2));   \

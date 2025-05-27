@@ -95,7 +95,7 @@ public:
         ret &= cpuinfo_has_x86_sse();
         return ret;
     }
-    
+
     static inline bool
     SupportNEON() {
         bool ret = false;
