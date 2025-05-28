@@ -58,6 +58,7 @@ using namespace vsag;
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx));    \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx2));   \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx512)); \
+        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(neon));   \
     }
 
 TEST_CASE("SQ4 SIMD Compute Codes", "[ut][simd]") {

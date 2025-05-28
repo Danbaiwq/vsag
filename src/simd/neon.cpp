@@ -1099,6 +1099,13 @@ shuffle_16_char(const uint8x16_t* a, const uint8x16_t* b) {
 #endif
 
 void
+Prefetch(const void* data) {
+#if defined(ENABLE_SSE)
+    _mm_prefetch(data, _MM_HINT_T0);
+#endif
+};
+
+void
 PQFastScanLookUp32(const uint8_t* lookup_table,
                    const uint8_t* codes,
                    uint64_t pq_dim,
