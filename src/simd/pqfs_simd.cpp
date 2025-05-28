@@ -37,7 +37,7 @@ GetPQFastScanLookUp32() {
 #if defined(ENABLE_SSE)
         return sse::PQFastScanLookUp32;
 #endif
-    } else if (SimdStatus::SupportSSE()) {
+    } else if (SimdStatus::SupportNEON()) {
 #if defined(ENABLE_NEON)
         return neon::PQFastScanLookUp32;
 #endif

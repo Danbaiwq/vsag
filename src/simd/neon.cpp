@@ -873,7 +873,7 @@ SQ8ComputeCodesL2Sqr(const uint8_t* codes1,
     return vaddvq_f32(sum) + generic::SQ8ComputeCodesL2Sqr(
                                  codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
 #else
-    return generic::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+    return generic::SQ8ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
 }
 
