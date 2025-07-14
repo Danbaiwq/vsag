@@ -1,4 +1,4 @@
-f defined(ENABLE_NEON)
+#if defined(ENABLE_NEON)
 #include <arm_neon.h>
 #endif
 
