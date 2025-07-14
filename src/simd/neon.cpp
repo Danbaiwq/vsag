@@ -782,22 +782,36 @@ FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 }
 
 #if defined(ENABLE_NEON)
-__inline uint8x16_t __attribute__((__always_inline__)) load_4_char(const uint8_t* data) {
-    uint8x16_t vec = vdupq_n_u8(0);
-    vec = vsetq_lane_u8(data[0], vec, 0);
-    vec = vsetq_lane_u8(data[1], vec, 1);
-    vec = vsetq_lane_u8(data[2], vec, 2);
-    vec = vsetq_lane_u8(data[3], vec, 3);
-    return vec;
+__inline float32x4_t __attribute__((__always_inline__)) load_4_uint8_to_float(const uint8_t* data) {
+    uint32x4_t code_values = {data[0], data[1], data[2], data[3]};
+    return vcvtq_f32_u32(code_values);
 }
 
-__inline float32x4_t __attribute__((__always_inline__)) get_4_float(uint8x16_t* code_vec) {
-    uint8x8_t code_low = vget_low_u8(*code_vec);
-    uint16x8_t code_low_16 = vmovl_u8(code_low);
-    uint16x4_t code_low_16_low = vget_low_u16(code_low_16);
-    uint32x4_t code_values = vmovl_u16(code_low_16_low);
-    float32x4_t code_floats = vcvtq_f32_u32(code_values);
-    return code_floats;
+__inline void __attribute__((__always_inline__))
+load_8_uint8_to_float(const uint8_t* data, float32x4_t& low, float32x4_t& high) {
+    uint8x8_t code_vec = vld1_u8(data);
+    uint16x8_t code_16 = vmovl_u8(code_vec);
+    uint32x4_t code_32_low = vmovl_u16(vget_low_u16(code_16));
+    uint32x4_t code_32_high = vmovl_u16(vget_high_u16(code_16));
+    low = vcvtq_f32_u32(code_32_low);
+    high = vcvtq_f32_u32(code_32_high);
+}
+
+__inline void __attribute__((__always_inline__)) load_16_uint8_to_float(
+    const uint8_t* data, float32x4_t& f0, float32x4_t& f1, float32x4_t& f2, float32x4_t& f3) {
+    uint8x16_t code_vec = vld1q_u8(data);
+    uint16x8_t code_16_low = vmovl_u8(vget_low_u8(code_vec));
+    uint16x8_t code_16_high = vmovl_u8(vget_high_u8(code_vec));
+
+    uint32x4_t code_32_0 = vmovl_u16(vget_low_u16(code_16_low));
+    uint32x4_t code_32_1 = vmovl_u16(vget_high_u16(code_16_low));
+    uint32x4_t code_32_2 = vmovl_u16(vget_low_u16(code_16_high));
+    uint32x4_t code_32_3 = vmovl_u16(vget_high_u16(code_16_high));
+
+    f0 = vcvtq_f32_u32(code_32_0);
+    f1 = vcvtq_f32_u32(code_32_1);
+    f2 = vcvtq_f32_u32(code_32_2);
+    f3 = vcvtq_f32_u32(code_32_3);
 }
 #endif
 
@@ -808,29 +822,51 @@ SQ8ComputeIP(const float* RESTRICT query,
              const float* RESTRICT diff,
              uint64_t dim) {
 #if defined(ENABLE_NEON)
-    float32x4_t sum_ = vdupq_n_f32(0.0f);
+    const float32x4_t inv255 = vdupq_n_f32(1.0f / 255.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    for (; i + 3 < dim; i += 4) {
-        // load 8bit * 16, front 4B are data
-        uint8x16_t code_vec = load_4_char(codes + i);
-        float32x4_t code_floats = get_4_float(&code_vec);
+    for (; i + 7 < dim; i += 8) {
+        __builtin_prefetch(codes + i + 32, 0, 1);
+        __builtin_prefetch(query + i + 16, 0, 1);
+        __builtin_prefetch(lower_bound + i + 16, 0, 1);
+        __builtin_prefetch(diff + i + 16, 0, 1);
 
+        float32x4_t code_floats_low, code_floats_high;
+        load_8_uint8_to_float(codes + i, code_floats_low, code_floats_high);
+
+        float32x4_t query_low = vld1q_f32(query + i);
+        float32x4_t query_high = vld1q_f32(query + i + 4);
+        float32x4_t diff_low = vld1q_f32(diff + i);
+        float32x4_t diff_high = vld1q_f32(diff + i + 4);
+        float32x4_t lower_bound_low = vld1q_f32(lower_bound + i);
+        float32x4_t lower_bound_high = vld1q_f32(lower_bound + i + 4);
+
+        float32x4_t scaled_codes_low = vmulq_f32(code_floats_low, inv255);
+        float32x4_t scaled_codes_high = vmulq_f32(code_floats_high, inv255);
+
+        float32x4_t adjusted_codes_low = vfmaq_f32(lower_bound_low, scaled_codes_low, diff_low);
+        float32x4_t adjusted_codes_high = vfmaq_f32(lower_bound_high, scaled_codes_high, diff_high);
+
+        sum1 = vfmaq_f32(sum1, query_low, adjusted_codes_low);
+        sum2 = vfmaq_f32(sum2, query_high, adjusted_codes_high);
+    }
+
+    for (; i + 3 < dim; i += 4) {
+        float32x4_t code_floats = load_4_uint8_to_float(codes + i);
         float32x4_t query_values = vld1q_f32(query + i);
         float32x4_t diff_values = vld1q_f32(diff + i);
         float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
 
-        float32x4_t inv255 = vdupq_n_f32(1.0f / 255.0f);
         float32x4_t scaled_codes = vmulq_f32(code_floats, inv255);
-        scaled_codes = vmulq_f32(scaled_codes, diff_values);
+        float32x4_t adjusted_codes = vfmaq_f32(lower_bound_values, scaled_codes, diff_values);
 
-        float32x4_t adjusted_codes = vaddq_f32(scaled_codes, lower_bound_values);
-
-        float32x4_t val = vmulq_f32(query_values, adjusted_codes);
-        sum_ = vaddq_f32(sum_, val);
+        sum1 = vfmaq_f32(sum1, query_values, adjusted_codes);
     }
 
-    return vaddvq_f32(sum_) +
+    float32x4_t final_sum = vaddq_f32(sum1, sum2);
+    return vaddvq_f32(final_sum) +
            generic::SQ8ComputeIP(query + i, codes + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeIP(query, codes, lower_bound, diff, dim);
@@ -844,27 +880,55 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT diff,
                 uint64_t dim) {
 #if defined(ENABLE_NEON)
-    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t inv255 = vdupq_n_f32(1.0f / 255.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    for (; i + 3 < dim; i += 4) {
-        uint8x16_t code_vec = load_4_char(codes + i);
-        float32x4_t code_floats = get_4_float(&code_vec);
-        code_floats = vdivq_f32(code_floats, vdupq_n_f32(255.0f));
+    for (; i + 7 < dim; i += 8) {
+        __builtin_prefetch(codes + i + 32, 0, 1);
+        __builtin_prefetch(query + i + 16, 0, 1);
+        __builtin_prefetch(lower_bound + i + 16, 0, 1);
+        __builtin_prefetch(diff + i + 16, 0, 1);
 
-        float32x4_t diff_values = vld1q_f32(diff + i);
-        float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
-        float32x4_t query_values = vld1q_f32(query + i);
+        float32x4_t code_floats_low, code_floats_high;
+        load_8_uint8_to_float(codes + i, code_floats_low, code_floats_high);
 
-        float32x4_t scaled_codes = vmulq_f32(code_floats, diff_values);
-        scaled_codes = vaddq_f32(scaled_codes, lower_bound_values);
-        float32x4_t val = vsubq_f32(query_values, scaled_codes);
+        float32x4_t query_low = vld1q_f32(query + i);
+        float32x4_t query_high = vld1q_f32(query + i + 4);
+        float32x4_t diff_low = vld1q_f32(diff + i);
+        float32x4_t diff_high = vld1q_f32(diff + i + 4);
+        float32x4_t lower_bound_low = vld1q_f32(lower_bound + i);
+        float32x4_t lower_bound_high = vld1q_f32(lower_bound + i + 4);
 
-        val = vmulq_f32(val, val);
-        sum = vaddq_f32(sum, val);
+        float32x4_t scaled_codes_low = vmulq_f32(code_floats_low, inv255);
+        float32x4_t scaled_codes_high = vmulq_f32(code_floats_high, inv255);
+
+        scaled_codes_low = vfmaq_f32(lower_bound_low, scaled_codes_low, diff_low);
+        scaled_codes_high = vfmaq_f32(lower_bound_high, scaled_codes_high, diff_high);
+
+        float32x4_t diff_low_val = vsubq_f32(query_low, scaled_codes_low);
+        float32x4_t diff_high_val = vsubq_f32(query_high, scaled_codes_high);
+
+        sum1 = vfmaq_f32(sum1, diff_low_val, diff_low_val);
+        sum2 = vfmaq_f32(sum2, diff_high_val, diff_high_val);
     }
 
-    return vaddvq_f32(sum) +
+    for (; i + 3 < dim; i += 4) {
+        float32x4_t code_floats = load_4_uint8_to_float(codes + i);
+        float32x4_t query_values = vld1q_f32(query + i);
+        float32x4_t diff_values = vld1q_f32(diff + i);
+        float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
+
+        float32x4_t scaled_codes = vmulq_f32(code_floats, inv255);
+        scaled_codes = vfmaq_f32(lower_bound_values, scaled_codes, diff_values);
+
+        float32x4_t diff_val = vsubq_f32(query_values, scaled_codes);
+        sum1 = vfmaq_f32(sum1, diff_val, diff_val);
+    }
+
+    float32x4_t final_sum = vaddq_f32(sum1, sum2);
+    return vaddvq_f32(final_sum) +
            generic::SQ8ComputeL2Sqr(query + i, codes + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeL2Sqr(query, codes, lower_bound, diff, dim);
@@ -878,31 +942,58 @@ SQ8ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_NEON)
-    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t inv255 = vdupq_n_f32(1.0f / 255.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
+    for (; i + 7 < dim; i += 8) {
+        __builtin_prefetch(codes1 + i + 32, 0, 1);
+        __builtin_prefetch(codes2 + i + 32, 0, 1);
+        __builtin_prefetch(lower_bound + i + 16, 0, 1);
+        __builtin_prefetch(diff + i + 16, 0, 1);
+
+        float32x4_t code1_floats_low, code1_floats_high;
+        float32x4_t code2_floats_low, code2_floats_high;
+        load_8_uint8_to_float(codes1 + i, code1_floats_low, code1_floats_high);
+        load_8_uint8_to_float(codes2 + i, code2_floats_low, code2_floats_high);
+
+        float32x4_t diff_low = vld1q_f32(diff + i);
+        float32x4_t diff_high = vld1q_f32(diff + i + 4);
+        float32x4_t lower_bound_low = vld1q_f32(lower_bound + i);
+        float32x4_t lower_bound_high = vld1q_f32(lower_bound + i + 4);
+
+        float32x4_t scaled_codes1_low = vmulq_f32(code1_floats_low, inv255);
+        float32x4_t scaled_codes1_high = vmulq_f32(code1_floats_high, inv255);
+        float32x4_t scaled_codes2_low = vmulq_f32(code2_floats_low, inv255);
+        float32x4_t scaled_codes2_high = vmulq_f32(code2_floats_high, inv255);
+
+        scaled_codes1_low = vfmaq_f32(lower_bound_low, scaled_codes1_low, diff_low);
+        scaled_codes1_high = vfmaq_f32(lower_bound_high, scaled_codes1_high, diff_high);
+        scaled_codes2_low = vfmaq_f32(lower_bound_low, scaled_codes2_low, diff_low);
+        scaled_codes2_high = vfmaq_f32(lower_bound_high, scaled_codes2_high, diff_high);
+
+        sum1 = vfmaq_f32(sum1, scaled_codes1_low, scaled_codes2_low);
+        sum2 = vfmaq_f32(sum2, scaled_codes1_high, scaled_codes2_high);
+    }
+
     for (; i + 3 < dim; i += 4) {
-        uint8x16_t code1_vec = load_4_char(codes1 + i);
-        uint8x16_t code2_vec = load_4_char(codes2 + i);
-
-        float32x4_t code1_floats = get_4_float(&code1_vec);
-        float32x4_t code2_floats = get_4_float(&code2_vec);
-
-        code1_floats = vdivq_f32(code1_floats, vdupq_n_f32(255.0f));
-        code2_floats = vdivq_f32(code2_floats, vdupq_n_f32(255.0f));
-
+        float32x4_t code1_floats = load_4_uint8_to_float(codes1 + i);
+        float32x4_t code2_floats = load_4_uint8_to_float(codes2 + i);
         float32x4_t diff_values = vld1q_f32(diff + i);
         float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
 
-        float32x4_t scaled_codes1 =
-            vaddq_f32(vmulq_f32(code1_floats, diff_values), lower_bound_values);
-        float32x4_t scaled_codes2 =
-            vaddq_f32(vmulq_f32(code2_floats, diff_values), lower_bound_values);
-        float32x4_t val = vmulq_f32(scaled_codes1, scaled_codes2);
-        sum = vaddq_f32(sum, val);
+        float32x4_t scaled_codes1 = vmulq_f32(code1_floats, inv255);
+        float32x4_t scaled_codes2 = vmulq_f32(code2_floats, inv255);
+
+        scaled_codes1 = vfmaq_f32(lower_bound_values, scaled_codes1, diff_values);
+        scaled_codes2 = vfmaq_f32(lower_bound_values, scaled_codes2, diff_values);
+
+        sum1 = vfmaq_f32(sum1, scaled_codes1, scaled_codes2);
     }
 
-    return vaddvq_f32(sum) +
+    float32x4_t final_sum = vaddq_f32(sum1, sum2);
+    return vaddvq_f32(final_sum) +
            generic::SQ8ComputeCodesIP(codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
@@ -916,34 +1007,63 @@ SQ8ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT diff,
                      uint64_t dim) {
 #if defined(ENABLE_NEON)
-
-    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t inv255 = vdupq_n_f32(1.0f / 255.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
+    for (; i + 7 < dim; i += 8) {
+        __builtin_prefetch(codes1 + i + 32, 0, 1);
+        __builtin_prefetch(codes2 + i + 32, 0, 1);
+        __builtin_prefetch(lower_bound + i + 16, 0, 1);
+        __builtin_prefetch(diff + i + 16, 0, 1);
+
+        float32x4_t code1_floats_low, code1_floats_high;
+        float32x4_t code2_floats_low, code2_floats_high;
+        load_8_uint8_to_float(codes1 + i, code1_floats_low, code1_floats_high);
+        load_8_uint8_to_float(codes2 + i, code2_floats_low, code2_floats_high);
+
+        float32x4_t diff_low = vld1q_f32(diff + i);
+        float32x4_t diff_high = vld1q_f32(diff + i + 4);
+        float32x4_t lower_bound_low = vld1q_f32(lower_bound + i);
+        float32x4_t lower_bound_high = vld1q_f32(lower_bound + i + 4);
+
+        float32x4_t scaled_codes1_low = vmulq_f32(code1_floats_low, inv255);
+        float32x4_t scaled_codes1_high = vmulq_f32(code1_floats_high, inv255);
+        float32x4_t scaled_codes2_low = vmulq_f32(code2_floats_low, inv255);
+        float32x4_t scaled_codes2_high = vmulq_f32(code2_floats_high, inv255);
+
+        scaled_codes1_low = vfmaq_f32(lower_bound_low, scaled_codes1_low, diff_low);
+        scaled_codes1_high = vfmaq_f32(lower_bound_high, scaled_codes1_high, diff_high);
+        scaled_codes2_low = vfmaq_f32(lower_bound_low, scaled_codes2_low, diff_low);
+        scaled_codes2_high = vfmaq_f32(lower_bound_high, scaled_codes2_high, diff_high);
+
+        float32x4_t diff_low_val = vsubq_f32(scaled_codes1_low, scaled_codes2_low);
+        float32x4_t diff_high_val = vsubq_f32(scaled_codes1_high, scaled_codes2_high);
+
+        sum1 = vfmaq_f32(sum1, diff_low_val, diff_low_val);
+        sum2 = vfmaq_f32(sum2, diff_high_val, diff_high_val);
+    }
+
     for (; i + 3 < dim; i += 4) {
-        // Load data into registers
-        uint8x16_t code1_vec = load_4_char(codes1 + i);
-        uint8x16_t code2_vec = load_4_char(codes2 + i);
-
-        float32x4_t code1_floats = get_4_float(&code1_vec);
-        float32x4_t code2_floats = get_4_float(&code2_vec);
-
-        code1_floats = vdivq_f32(code1_floats, vdupq_n_f32(255.0f));
-        code2_floats = vdivq_f32(code2_floats, vdupq_n_f32(255.0f));
-
+        float32x4_t code1_floats = load_4_uint8_to_float(codes1 + i);
+        float32x4_t code2_floats = load_4_uint8_to_float(codes2 + i);
         float32x4_t diff_values = vld1q_f32(diff + i);
         float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
 
-        float32x4_t scaled_codes1 =
-            vaddq_f32(vmulq_f32(code1_floats, diff_values), lower_bound_values);
-        float32x4_t scaled_codes2 =
-            vaddq_f32(vmulq_f32(code2_floats, diff_values), lower_bound_values);
-        float32x4_t val = vsubq_f32(scaled_codes1, scaled_codes2);
-        val = vmulq_f32(val, val);
-        sum = vaddq_f32(sum, val);
+        float32x4_t scaled_codes1 = vmulq_f32(code1_floats, inv255);
+        float32x4_t scaled_codes2 = vmulq_f32(code2_floats, inv255);
+
+        scaled_codes1 = vfmaq_f32(lower_bound_values, scaled_codes1, diff_values);
+        scaled_codes2 = vfmaq_f32(lower_bound_values, scaled_codes2, diff_values);
+
+        float32x4_t diff_val = vsubq_f32(scaled_codes1, scaled_codes2);
+        sum1 = vfmaq_f32(sum1, diff_val, diff_val);
     }
-    return vaddvq_f32(sum) + generic::SQ8ComputeCodesL2Sqr(
-                                 codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
+
+    float32x4_t final_sum = vaddq_f32(sum1, sum2);
+    return vaddvq_f32(final_sum) + generic::SQ8ComputeCodesL2Sqr(
+                                       codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
 #else
     return generic::SQ8ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
