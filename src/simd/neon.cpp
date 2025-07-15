@@ -1,4 +1,3 @@
-
 // Copyright 2024-present the vsag project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -813,6 +812,21 @@ __inline void __attribute__((__always_inline__)) load_16_uint8_to_float(
     f2 = vcvtq_f32_u32(code_32_2);
     f3 = vcvtq_f32_u32(code_32_3);
 }
+
+__inline void __attribute__((__always_inline__)) load_12_uint8_to_float(
+    const uint8_t* data, float32x4_t& f0, float32x4_t& f1, float32x4_t& f2) {
+    // Load 12 bytes efficiently
+    uint8x8_t code_low = vld1_u8(data);        // Load first 8 bytes
+    uint32x4_t code_last = {data[8], data[9], data[10], data[11]};  // Load last 4 bytes
+    
+    uint16x8_t code_16 = vmovl_u8(code_low);
+    uint32x4_t code_32_0 = vmovl_u16(vget_low_u16(code_16));
+    uint32x4_t code_32_1 = vmovl_u16(vget_high_u16(code_16));
+
+    f0 = vcvtq_f32_u32(code_32_0);
+    f1 = vcvtq_f32_u32(code_32_1);
+    f2 = vcvtq_f32_u32(code_last);
+}
 #endif
 
 float
@@ -826,67 +840,102 @@ SQ8ComputeIP(const float* RESTRICT query,
     float32x4_t sum = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    // Process 16 elements at a time for better performance
-    for (; i + 15 < dim; i += 16) {
-        __builtin_prefetch(codes + i + 64, 0, 1);
-        __builtin_prefetch(query + i + 32, 0, 1);
-        __builtin_prefetch(lower_bound + i + 32, 0, 1);
-        __builtin_prefetch(diff + i + 32, 0, 1);
+    // Process 12 elements at a time for optimal instruction usage
+    for (; i + 11 < dim; i += 12) {
+        __builtin_prefetch(codes + i + 48, 0, 1);
+        __builtin_prefetch(query + i + 24, 0, 1);
 
-        float32x4_t code_floats_0, code_floats_1, code_floats_2, code_floats_3;
-        load_16_uint8_to_float(codes + i, code_floats_0, code_floats_1, code_floats_2, code_floats_3);
+        // Load 12 codes and convert to float in one operation
+        float32x4_t code_floats_0, code_floats_1, code_floats_2;
+        load_12_uint8_to_float(codes + i, code_floats_0, code_floats_1, code_floats_2);
 
-        float32x4_t query_0 = vld1q_f32(query + i);
-        float32x4_t query_1 = vld1q_f32(query + i + 4);
-        float32x4_t query_2 = vld1q_f32(query + i + 8);
-        float32x4_t query_3 = vld1q_f32(query + i + 12);
+        // Load 12 elements each using x3 intrinsics
+        float32x4x3_t query_vec = vld1q_f32_x3(query + i);
+        float32x4x3_t diff_vec = vld1q_f32_x3(diff + i);
+        float32x4x3_t lower_bound_vec = vld1q_f32_x3(lower_bound + i);
 
-        float32x4_t diff_0 = vld1q_f32(diff + i);
-        float32x4_t diff_1 = vld1q_f32(diff + i + 4);
-        float32x4_t diff_2 = vld1q_f32(diff + i + 8);
-        float32x4_t diff_3 = vld1q_f32(diff + i + 12);
+        // Normalize and adjust codes in one fused operation: lower_bound + (codes/255) * diff
+        float32x4x3_t adjusted_vec;
+        adjusted_vec.val[0] = vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code_floats_0, inv255), diff_vec.val[0]);
+        adjusted_vec.val[1] = vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code_floats_1, inv255), diff_vec.val[1]);
+        adjusted_vec.val[2] = vfmaq_f32(lower_bound_vec.val[2], vmulq_f32(code_floats_2, inv255), diff_vec.val[2]);
 
-        float32x4_t lower_bound_0 = vld1q_f32(lower_bound + i);
-        float32x4_t lower_bound_1 = vld1q_f32(lower_bound + i + 4);
-        float32x4_t lower_bound_2 = vld1q_f32(lower_bound + i + 8);
-        float32x4_t lower_bound_3 = vld1q_f32(lower_bound + i + 12);
-
-        // Normalize codes: codes / 255.0f
-        float32x4_t normalized_0 = vmulq_f32(code_floats_0, inv255);
-        float32x4_t normalized_1 = vmulq_f32(code_floats_1, inv255);
-        float32x4_t normalized_2 = vmulq_f32(code_floats_2, inv255);
-        float32x4_t normalized_3 = vmulq_f32(code_floats_3, inv255);
-
-        // Adjust codes: lower_bound + normalized * diff
-        float32x4_t adjusted_0 = vfmaq_f32(lower_bound_0, normalized_0, diff_0);
-        float32x4_t adjusted_1 = vfmaq_f32(lower_bound_1, normalized_1, diff_1);
-        float32x4_t adjusted_2 = vfmaq_f32(lower_bound_2, normalized_2, diff_2);
-        float32x4_t adjusted_3 = vfmaq_f32(lower_bound_3, normalized_3, diff_3);
-
-        // Compute inner product: query * adjusted
-        sum = vfmaq_f32(sum, query_0, adjusted_0);
-        sum = vfmaq_f32(sum, query_1, adjusted_1);
-        sum = vfmaq_f32(sum, query_2, adjusted_2);
-        sum = vfmaq_f32(sum, query_3, adjusted_3);
+        // Compute inner product and accumulate
+        sum = vfmaq_f32(sum, query_vec.val[0], adjusted_vec.val[0]);
+        sum = vfmaq_f32(sum, query_vec.val[1], adjusted_vec.val[1]);
+        sum = vfmaq_f32(sum, query_vec.val[2], adjusted_vec.val[2]);
     }
 
-    // Process remaining elements in chunks of 4
-    for (; i + 3 < dim; i += 4) {
+    // Process remaining elements with optimized NEON instructions
+    uint64_t d = dim - i;
+    
+    // Process 8 elements if remaining
+    if (d >= 8) {
+        float32x4_t code_floats_low, code_floats_high;
+        load_8_uint8_to_float(codes + i, code_floats_low, code_floats_high);
+        
+        float32x4x2_t query_vec = vld1q_f32_x2(query + i);
+        float32x4x2_t diff_vec = vld1q_f32_x2(diff + i);
+        float32x4x2_t lower_bound_vec = vld1q_f32_x2(lower_bound + i);
+        
+        float32x4x2_t adjusted_vec;
+        adjusted_vec.val[0] = vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code_floats_low, inv255), diff_vec.val[0]);
+        adjusted_vec.val[1] = vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code_floats_high, inv255), diff_vec.val[1]);
+        
+        sum = vfmaq_f32(sum, query_vec.val[0], adjusted_vec.val[0]);
+        sum = vfmaq_f32(sum, query_vec.val[1], adjusted_vec.val[1]);
+        i += 8;
+        d -= 8;
+    }
+
+    // Process 4 elements if remaining
+    if (d >= 4) {
         float32x4_t code_floats = load_4_uint8_to_float(codes + i);
-        float32x4_t query_values = vld1q_f32(query + i);
-        float32x4_t diff_values = vld1q_f32(diff + i);
-        float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
+        float32x4_t query_vec = vld1q_f32(query + i);
+        float32x4_t diff_vec = vld1q_f32(diff + i);
+        float32x4_t lower_bound_vec = vld1q_f32(lower_bound + i);
 
-        float32x4_t normalized = vmulq_f32(code_floats, inv255);
-        float32x4_t adjusted = vfmaq_f32(lower_bound_values, normalized, diff_values);
-        sum = vfmaq_f32(sum, query_values, adjusted);
+        float32x4_t adjusted = vfmaq_f32(lower_bound_vec, vmulq_f32(code_floats, inv255), diff_vec);
+        sum = vfmaq_f32(sum, query_vec, adjusted);
+        i += 4;
+        d -= 4;
     }
-
-    float result = vaddvq_f32(sum);
-    if (i < dim) {
-        result += generic::SQ8ComputeIP(query + i, codes + i, lower_bound + i, diff + i, dim - i);
+    
+    // Process remaining 1-3 elements
+    float32x4_t res_query = vdupq_n_f32(0.0f);
+    float32x4_t res_codes = vdupq_n_f32(0.0f);
+    float32x4_t res_diff = vdupq_n_f32(0.0f);
+    float32x4_t res_lower_bound = vdupq_n_f32(0.0f);
+    
+    if (d >= 3) {
+        res_query = vld1q_lane_f32(query + i, res_query, 2);
+        res_codes = vsetq_lane_f32(codes[i], res_codes, 2);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 2);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 2);
+        i++; d--;
     }
-    return result;
+    
+    if (d >= 2) {
+        res_query = vld1q_lane_f32(query + i, res_query, 1);
+        res_codes = vsetq_lane_f32(codes[i], res_codes, 1);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 1);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 1);
+        i++; d--;
+    }
+    
+    if (d >= 1) {
+        res_query = vld1q_lane_f32(query + i, res_query, 0);
+        res_codes = vsetq_lane_f32(codes[i], res_codes, 0);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 0);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 0);
+    }
+    
+    if (dim > i) {
+        float32x4_t adjusted = vfmaq_f32(res_lower_bound, vmulq_f32(res_codes, inv255), res_diff);
+        sum = vfmaq_f32(sum, res_query, adjusted);
+    }
+    
+    return vaddvq_f32(sum);
 #else
     return generic::SQ8ComputeIP(query, codes, lower_bound, diff, dim);
 #endif
@@ -903,74 +952,108 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
     float32x4_t sum = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    // Process 16 elements at a time for better performance
-    for (; i + 15 < dim; i += 16) {
-        __builtin_prefetch(codes + i + 64, 0, 1);
-        __builtin_prefetch(query + i + 32, 0, 1);
-        __builtin_prefetch(lower_bound + i + 32, 0, 1);
-        __builtin_prefetch(diff + i + 32, 0, 1);
+    // Process 12 elements at a time for optimal instruction usage
+    for (; i + 11 < dim; i += 12) {
+        __builtin_prefetch(codes + i + 48, 0, 1);
+        __builtin_prefetch(query + i + 24, 0, 1);
 
-        float32x4_t code_floats_0, code_floats_1, code_floats_2, code_floats_3;
-        load_16_uint8_to_float(codes + i, code_floats_0, code_floats_1, code_floats_2, code_floats_3);
+        // Load 12 codes and convert to float in one operation
+        float32x4_t code_floats_0, code_floats_1, code_floats_2;
+        load_12_uint8_to_float(codes + i, code_floats_0, code_floats_1, code_floats_2);
 
-        float32x4_t query_0 = vld1q_f32(query + i);
-        float32x4_t query_1 = vld1q_f32(query + i + 4);
-        float32x4_t query_2 = vld1q_f32(query + i + 8);
-        float32x4_t query_3 = vld1q_f32(query + i + 12);
+        // Load 12 elements each using x3 intrinsics
+        float32x4x3_t query_vec = vld1q_f32_x3(query + i);
+        float32x4x3_t diff_vec = vld1q_f32_x3(diff + i);
+        float32x4x3_t lower_bound_vec = vld1q_f32_x3(lower_bound + i);
 
-        float32x4_t diff_0 = vld1q_f32(diff + i);
-        float32x4_t diff_1 = vld1q_f32(diff + i + 4);
-        float32x4_t diff_2 = vld1q_f32(diff + i + 8);
-        float32x4_t diff_3 = vld1q_f32(diff + i + 12);
+        // Compute adjusted codes and distance in one fused operation
+        float32x4x3_t dist_vec;
+        dist_vec.val[0] = vsubq_f32(query_vec.val[0], vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code_floats_0, inv255), diff_vec.val[0]));
+        dist_vec.val[1] = vsubq_f32(query_vec.val[1], vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code_floats_1, inv255), diff_vec.val[1]));
+        dist_vec.val[2] = vsubq_f32(query_vec.val[2], vfmaq_f32(lower_bound_vec.val[2], vmulq_f32(code_floats_2, inv255), diff_vec.val[2]));
 
-        float32x4_t lower_bound_0 = vld1q_f32(lower_bound + i);
-        float32x4_t lower_bound_1 = vld1q_f32(lower_bound + i + 4);
-        float32x4_t lower_bound_2 = vld1q_f32(lower_bound + i + 8);
-        float32x4_t lower_bound_3 = vld1q_f32(lower_bound + i + 12);
-
-        // Normalize codes: codes / 255.0f
-        float32x4_t normalized_0 = vmulq_f32(code_floats_0, inv255);
-        float32x4_t normalized_1 = vmulq_f32(code_floats_1, inv255);
-        float32x4_t normalized_2 = vmulq_f32(code_floats_2, inv255);
-        float32x4_t normalized_3 = vmulq_f32(code_floats_3, inv255);
-
-        // Adjust codes: lower_bound + normalized * diff
-        float32x4_t adjusted_0 = vfmaq_f32(lower_bound_0, normalized_0, diff_0);
-        float32x4_t adjusted_1 = vfmaq_f32(lower_bound_1, normalized_1, diff_1);
-        float32x4_t adjusted_2 = vfmaq_f32(lower_bound_2, normalized_2, diff_2);
-        float32x4_t adjusted_3 = vfmaq_f32(lower_bound_3, normalized_3, diff_3);
-
-        // Compute distance: query - adjusted
-        float32x4_t dist_0 = vsubq_f32(query_0, adjusted_0);
-        float32x4_t dist_1 = vsubq_f32(query_1, adjusted_1);
-        float32x4_t dist_2 = vsubq_f32(query_2, adjusted_2);
-        float32x4_t dist_3 = vsubq_f32(query_3, adjusted_3);
-
-        // Compute squared distance: dist * dist
-        sum = vfmaq_f32(sum, dist_0, dist_0);
-        sum = vfmaq_f32(sum, dist_1, dist_1);
-        sum = vfmaq_f32(sum, dist_2, dist_2);
-        sum = vfmaq_f32(sum, dist_3, dist_3);
+        // Compute squared distance and accumulate
+        sum = vfmaq_f32(sum, dist_vec.val[0], dist_vec.val[0]);
+        sum = vfmaq_f32(sum, dist_vec.val[1], dist_vec.val[1]);
+        sum = vfmaq_f32(sum, dist_vec.val[2], dist_vec.val[2]);
     }
 
-    // Process remaining elements in chunks of 4
-    for (; i + 3 < dim; i += 4) {
-        float32x4_t code_floats = load_4_uint8_to_float(codes + i);
-        float32x4_t query_values = vld1q_f32(query + i);
-        float32x4_t diff_values = vld1q_f32(diff + i);
-        float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
+    // Process remaining elements with optimized NEON instructions
+    uint64_t d = dim - i;
+    
+    // Process 8 elements if remaining
+    if (d >= 8) {
+        float32x4_t code_floats_low, code_floats_high;
+        load_8_uint8_to_float(codes + i, code_floats_low, code_floats_high);
+        
+        float32x4x2_t query_vec = vld1q_f32_x2(query + i);
+        float32x4x2_t diff_vec = vld1q_f32_x2(diff + i);
+        float32x4x2_t lower_bound_vec = vld1q_f32_x2(lower_bound + i);
+        
+        float32x4x2_t adjusted_vec;
+        adjusted_vec.val[0] = vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code_floats_low, inv255), diff_vec.val[0]);
+        adjusted_vec.val[1] = vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code_floats_high, inv255), diff_vec.val[1]);
+        
+        float32x4x2_t dist_vec;
+        dist_vec.val[0] = vsubq_f32(query_vec.val[0], adjusted_vec.val[0]);
+        dist_vec.val[1] = vsubq_f32(query_vec.val[1], adjusted_vec.val[1]);
+        
+        sum = vfmaq_f32(sum, dist_vec.val[0], dist_vec.val[0]);
+        sum = vfmaq_f32(sum, dist_vec.val[1], dist_vec.val[1]);
+        i += 8;
+        d -= 8;
+    }
 
-        float32x4_t normalized = vmulq_f32(code_floats, inv255);
-        float32x4_t adjusted = vfmaq_f32(lower_bound_values, normalized, diff_values);
-        float32x4_t dist = vsubq_f32(query_values, adjusted);
+    // Process 4 elements if remaining
+    if (d >= 4) {
+        float32x4_t code_floats = load_4_uint8_to_float(codes + i);
+        float32x4_t query_vec = vld1q_f32(query + i);
+        float32x4_t diff_vec = vld1q_f32(diff + i);
+        float32x4_t lower_bound_vec = vld1q_f32(lower_bound + i);
+
+        float32x4_t adjusted = vfmaq_f32(lower_bound_vec, vmulq_f32(code_floats, inv255), diff_vec);
+        float32x4_t dist = vsubq_f32(query_vec, adjusted);
+        sum = vfmaq_f32(sum, dist, dist);
+        i += 4;
+        d -= 4;
+    }
+    
+    // Process remaining 1-3 elements
+    float32x4_t res_query = vdupq_n_f32(0.0f);
+    float32x4_t res_codes = vdupq_n_f32(0.0f);
+    float32x4_t res_diff = vdupq_n_f32(0.0f);
+    float32x4_t res_lower_bound = vdupq_n_f32(0.0f);
+    
+    if (d >= 3) {
+        res_query = vld1q_lane_f32(query + i, res_query, 2);
+        res_codes = vsetq_lane_f32(codes[i], res_codes, 2);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 2);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 2);
+        i++; d--;
+    }
+    
+    if (d >= 2) {
+        res_query = vld1q_lane_f32(query + i, res_query, 1);
+        res_codes = vsetq_lane_f32(codes[i], res_codes, 1);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 1);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 1);
+        i++; d--;
+    }
+    
+    if (d >= 1) {
+        res_query = vld1q_lane_f32(query + i, res_query, 0);
+        res_codes = vsetq_lane_f32(codes[i], res_codes, 0);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 0);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 0);
+    }
+    
+    if (dim > i) {
+        float32x4_t adjusted = vfmaq_f32(res_lower_bound, vmulq_f32(res_codes, inv255), res_diff);
+        float32x4_t dist = vsubq_f32(res_query, adjusted);
         sum = vfmaq_f32(sum, dist, dist);
     }
-
-    float result = vaddvq_f32(sum);
-    if (i < dim) {
-        result += generic::SQ8ComputeL2Sqr(query + i, codes + i, lower_bound + i, diff + i, dim - i);
-    }
-    return result;
+    
+    return vaddvq_f32(sum);
 #else
     return generic::SQ8ComputeL2Sqr(query, codes, lower_bound, diff, dim);
 #endif
@@ -987,78 +1070,112 @@ SQ8ComputeCodesIP(const uint8_t* RESTRICT codes1,
     float32x4_t sum = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    // Process 16 elements at a time for better performance
-    for (; i + 15 < dim; i += 16) {
-        __builtin_prefetch(codes1 + i + 64, 0, 1);
-        __builtin_prefetch(codes2 + i + 64, 0, 1);
-        __builtin_prefetch(lower_bound + i + 32, 0, 1);
-        __builtin_prefetch(diff + i + 32, 0, 1);
+    // Process 12 elements at a time for optimal instruction usage
+    for (; i + 11 < dim; i += 12) {
+        __builtin_prefetch(codes1 + i + 48, 0, 1);
+        __builtin_prefetch(codes2 + i + 48, 0, 1);
 
-        float32x4_t code1_floats_0, code1_floats_1, code1_floats_2, code1_floats_3;
-        float32x4_t code2_floats_0, code2_floats_1, code2_floats_2, code2_floats_3;
-        load_16_uint8_to_float(codes1 + i, code1_floats_0, code1_floats_1, code1_floats_2, code1_floats_3);
-        load_16_uint8_to_float(codes2 + i, code2_floats_0, code2_floats_1, code2_floats_2, code2_floats_3);
+        // Load 12 codes from both arrays and convert to float
+        float32x4_t code1_floats_0, code1_floats_1, code1_floats_2;
+        float32x4_t code2_floats_0, code2_floats_1, code2_floats_2;
+        load_12_uint8_to_float(codes1 + i, code1_floats_0, code1_floats_1, code1_floats_2);
+        load_12_uint8_to_float(codes2 + i, code2_floats_0, code2_floats_1, code2_floats_2);
 
-        float32x4_t diff_0 = vld1q_f32(diff + i);
-        float32x4_t diff_1 = vld1q_f32(diff + i + 4);
-        float32x4_t diff_2 = vld1q_f32(diff + i + 8);
-        float32x4_t diff_3 = vld1q_f32(diff + i + 12);
+        // Load 12 elements each using x3 intrinsics
+        float32x4x3_t diff_vec = vld1q_f32_x3(diff + i);
+        float32x4x3_t lower_bound_vec = vld1q_f32_x3(lower_bound + i);
 
-        float32x4_t lower_bound_0 = vld1q_f32(lower_bound + i);
-        float32x4_t lower_bound_1 = vld1q_f32(lower_bound + i + 4);
-        float32x4_t lower_bound_2 = vld1q_f32(lower_bound + i + 8);
-        float32x4_t lower_bound_3 = vld1q_f32(lower_bound + i + 12);
+        // Compute adjusted codes and inner product in one fused operation
+        float32x4x3_t adjusted1_vec, adjusted2_vec;
+        adjusted1_vec.val[0] = vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code1_floats_0, inv255), diff_vec.val[0]);
+        adjusted1_vec.val[1] = vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code1_floats_1, inv255), diff_vec.val[1]);
+        adjusted1_vec.val[2] = vfmaq_f32(lower_bound_vec.val[2], vmulq_f32(code1_floats_2, inv255), diff_vec.val[2]);
 
-        // Normalize codes: codes / 255.0f
-        float32x4_t normalized1_0 = vmulq_f32(code1_floats_0, inv255);
-        float32x4_t normalized1_1 = vmulq_f32(code1_floats_1, inv255);
-        float32x4_t normalized1_2 = vmulq_f32(code1_floats_2, inv255);
-        float32x4_t normalized1_3 = vmulq_f32(code1_floats_3, inv255);
+        adjusted2_vec.val[0] = vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code2_floats_0, inv255), diff_vec.val[0]);
+        adjusted2_vec.val[1] = vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code2_floats_1, inv255), diff_vec.val[1]);
+        adjusted2_vec.val[2] = vfmaq_f32(lower_bound_vec.val[2], vmulq_f32(code2_floats_2, inv255), diff_vec.val[2]);
 
-        float32x4_t normalized2_0 = vmulq_f32(code2_floats_0, inv255);
-        float32x4_t normalized2_1 = vmulq_f32(code2_floats_1, inv255);
-        float32x4_t normalized2_2 = vmulq_f32(code2_floats_2, inv255);
-        float32x4_t normalized2_3 = vmulq_f32(code2_floats_3, inv255);
-
-        // Adjust codes: lower_bound + normalized * diff
-        float32x4_t adjusted1_0 = vfmaq_f32(lower_bound_0, normalized1_0, diff_0);
-        float32x4_t adjusted1_1 = vfmaq_f32(lower_bound_1, normalized1_1, diff_1);
-        float32x4_t adjusted1_2 = vfmaq_f32(lower_bound_2, normalized1_2, diff_2);
-        float32x4_t adjusted1_3 = vfmaq_f32(lower_bound_3, normalized1_3, diff_3);
-
-        float32x4_t adjusted2_0 = vfmaq_f32(lower_bound_0, normalized2_0, diff_0);
-        float32x4_t adjusted2_1 = vfmaq_f32(lower_bound_1, normalized2_1, diff_1);
-        float32x4_t adjusted2_2 = vfmaq_f32(lower_bound_2, normalized2_2, diff_2);
-        float32x4_t adjusted2_3 = vfmaq_f32(lower_bound_3, normalized2_3, diff_3);
-
-        // Compute inner product: adjusted1 * adjusted2
-        sum = vfmaq_f32(sum, adjusted1_0, adjusted2_0);
-        sum = vfmaq_f32(sum, adjusted1_1, adjusted2_1);
-        sum = vfmaq_f32(sum, adjusted1_2, adjusted2_2);
-        sum = vfmaq_f32(sum, adjusted1_3, adjusted2_3);
+        // Compute inner product and accumulate
+        sum = vfmaq_f32(sum, adjusted1_vec.val[0], adjusted2_vec.val[0]);
+        sum = vfmaq_f32(sum, adjusted1_vec.val[1], adjusted2_vec.val[1]);
+        sum = vfmaq_f32(sum, adjusted1_vec.val[2], adjusted2_vec.val[2]);
     }
 
-    // Process remaining elements in chunks of 4
-    for (; i + 3 < dim; i += 4) {
+    // Process remaining elements with optimized NEON instructions
+    uint64_t d = dim - i;
+    
+    // Process 8 elements if remaining
+    if (d >= 8) {
+        float32x4_t code1_floats_low, code1_floats_high;
+        float32x4_t code2_floats_low, code2_floats_high;
+        load_8_uint8_to_float(codes1 + i, code1_floats_low, code1_floats_high);
+        load_8_uint8_to_float(codes2 + i, code2_floats_low, code2_floats_high);
+        
+        float32x4x2_t diff_vec = vld1q_f32_x2(diff + i);
+        float32x4x2_t lower_bound_vec = vld1q_f32_x2(lower_bound + i);
+
+        float32x4x2_t adjusted1_vec, adjusted2_vec;
+        adjusted1_vec.val[0] = vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code1_floats_low, inv255), diff_vec.val[0]);
+        adjusted1_vec.val[1] = vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code1_floats_high, inv255), diff_vec.val[1]);
+        adjusted2_vec.val[0] = vfmaq_f32(lower_bound_vec.val[0], vmulq_f32(code2_floats_low, inv255), diff_vec.val[0]);
+        adjusted2_vec.val[1] = vfmaq_f32(lower_bound_vec.val[1], vmulq_f32(code2_floats_high, inv255), diff_vec.val[1]);
+        
+        sum = vfmaq_f32(sum, adjusted1_vec.val[0], adjusted2_vec.val[0]);
+        sum = vfmaq_f32(sum, adjusted1_vec.val[1], adjusted2_vec.val[1]);
+        i += 8;
+        d -= 8;
+    }
+
+    // Process 4 elements if remaining
+    if (d >= 4) {
         float32x4_t code1_floats = load_4_uint8_to_float(codes1 + i);
         float32x4_t code2_floats = load_4_uint8_to_float(codes2 + i);
-        float32x4_t diff_values = vld1q_f32(diff + i);
-        float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
+        float32x4_t diff_vec = vld1q_f32(diff + i);
+        float32x4_t lower_bound_vec = vld1q_f32(lower_bound + i);
 
-        float32x4_t normalized1 = vmulq_f32(code1_floats, inv255);
-        float32x4_t normalized2 = vmulq_f32(code2_floats, inv255);
-
-        float32x4_t adjusted1 = vfmaq_f32(lower_bound_values, normalized1, diff_values);
-        float32x4_t adjusted2 = vfmaq_f32(lower_bound_values, normalized2, diff_values);
-
+        float32x4_t adjusted1 = vfmaq_f32(lower_bound_vec, vmulq_f32(code1_floats, inv255), diff_vec);
+        float32x4_t adjusted2 = vfmaq_f32(lower_bound_vec, vmulq_f32(code2_floats, inv255), diff_vec);
+        sum = vfmaq_f32(sum, adjusted1, adjusted2);
+        i += 4;
+        d -= 4;
+    }
+    
+    // Process remaining 1-3 elements
+    float32x4_t res_codes1 = vdupq_n_f32(0.0f);
+    float32x4_t res_codes2 = vdupq_n_f32(0.0f);
+    float32x4_t res_diff = vdupq_n_f32(0.0f);
+    float32x4_t res_lower_bound = vdupq_n_f32(0.0f);
+    
+    if (d >= 3) {
+        res_codes1 = vsetq_lane_f32(codes1[i], res_codes1, 2);
+        res_codes2 = vsetq_lane_f32(codes2[i], res_codes2, 2);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 2);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 2);
+        i++; d--;
+    }
+    
+    if (d >= 2) {
+        res_codes1 = vsetq_lane_f32(codes1[i], res_codes1, 1);
+        res_codes2 = vsetq_lane_f32(codes2[i], res_codes2, 1);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 1);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 1);
+        i++; d--;
+    }
+    
+    if (d >= 1) {
+        res_codes1 = vsetq_lane_f32(codes1[i], res_codes1, 0);
+        res_codes2 = vsetq_lane_f32(codes2[i], res_codes2, 0);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 0);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 0);
+    }
+    
+    if (dim > i) {
+        float32x4_t adjusted1 = vfmaq_f32(res_lower_bound, vmulq_f32(res_codes1, inv255), res_diff);
+        float32x4_t adjusted2 = vfmaq_f32(res_lower_bound, vmulq_f32(res_codes2, inv255), res_diff);
         sum = vfmaq_f32(sum, adjusted1, adjusted2);
     }
 
-    float result = vaddvq_f32(sum);
-    if (i < dim) {
-        result += generic::SQ8ComputeCodesIP(codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
-    }
-    return result;
+    return vaddvq_f32(sum);
 #else
     return generic::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -1075,68 +1192,126 @@ SQ8ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
     float32x4_t sum = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    // Process 16 elements at a time for better performance
-    for (; i + 15 < dim; i += 16) {
-        __builtin_prefetch(codes1 + i + 64, 0, 1);
-        __builtin_prefetch(codes2 + i + 64, 0, 1);
-        __builtin_prefetch(lower_bound + i + 32, 0, 1);
-        __builtin_prefetch(diff + i + 32, 0, 1);
+    // Process 12 elements at a time for optimal instruction usage
+    for (; i + 11 < dim; i += 12) {
+        __builtin_prefetch(codes1 + i + 48, 0, 1);
+        __builtin_prefetch(codes2 + i + 48, 0, 1);
 
-        // Load codes and convert to float
-        uint8x16_t codes1_vec = vld1q_u8(codes1 + i);
-        uint8x16_t codes2_vec = vld1q_u8(codes2 + i);
+        // Load 12 codes and compute difference at integer level for efficiency
+        uint8x8_t codes1_low = vld1_u8(codes1 + i);
+        uint8x8_t codes2_low = vld1_u8(codes2 + i);
+        uint32x4_t codes1_last = {codes1[i+8], codes1[i+9], codes1[i+10], codes1[i+11]};
+        uint32x4_t codes2_last = {codes2[i+8], codes2[i+9], codes2[i+10], codes2[i+11]};
 
-        // Compute code difference at integer level for better efficiency
-        int16x8_t diff_low = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(codes1_vec), vget_low_u8(codes2_vec)));
-        int16x8_t diff_high = vreinterpretq_s16_u16(vsubl_u8(vget_high_u8(codes1_vec), vget_high_u8(codes2_vec)));
+        // Compute code difference at integer level
+        int16x8_t diff_low = vreinterpretq_s16_u16(vsubl_u8(codes1_low, codes2_low));
+        int32x4_t diff_last = vsubq_s32(vreinterpretq_s32_u32(codes1_last), vreinterpretq_s32_u32(codes2_last));
 
-        // Convert to float32x4_t
-        float32x4_t diff_0 = vcvtq_f32_s32(vmovl_s16(vget_low_s16(diff_low)));
-        float32x4_t diff_1 = vcvtq_f32_s32(vmovl_s16(vget_high_s16(diff_low)));
-        float32x4_t diff_2 = vcvtq_f32_s32(vmovl_s16(vget_low_s16(diff_high)));
-        float32x4_t diff_3 = vcvtq_f32_s32(vmovl_s16(vget_high_s16(diff_high)));
+        // Convert to float32x4x3_t
+        float32x4x3_t code_diff_vec;
+        code_diff_vec.val[0] = vcvtq_f32_s32(vmovl_s16(vget_low_s16(diff_low)));
+        code_diff_vec.val[1] = vcvtq_f32_s32(vmovl_s16(vget_high_s16(diff_low)));
+        code_diff_vec.val[2] = vcvtq_f32_s32(diff_last);
 
-        // Load diff values
-        float32x4_t diff_values_0 = vld1q_f32(diff + i);
-        float32x4_t diff_values_1 = vld1q_f32(diff + i + 4);
-        float32x4_t diff_values_2 = vld1q_f32(diff + i + 8);
-        float32x4_t diff_values_3 = vld1q_f32(diff + i + 12);
+        // Load 12 diff values using x3 intrinsics
+        float32x4x3_t diff_vec = vld1q_f32_x3(diff + i);
 
-        // Scale by 1/255 and multiply by diff
-        float32x4_t scaled_diff_0 = vmulq_f32(vmulq_f32(diff_0, inv255), diff_values_0);
-        float32x4_t scaled_diff_1 = vmulq_f32(vmulq_f32(diff_1, inv255), diff_values_1);
-        float32x4_t scaled_diff_2 = vmulq_f32(vmulq_f32(diff_2, inv255), diff_values_2);
-        float32x4_t scaled_diff_3 = vmulq_f32(vmulq_f32(diff_3, inv255), diff_values_3);
+        // Compute final distance in one fused operation: (code_diff / 255) * diff
+        float32x4x3_t scaled_diff_vec;
+        scaled_diff_vec.val[0] = vmulq_f32(vmulq_f32(code_diff_vec.val[0], inv255), diff_vec.val[0]);
+        scaled_diff_vec.val[1] = vmulq_f32(vmulq_f32(code_diff_vec.val[1], inv255), diff_vec.val[1]);
+        scaled_diff_vec.val[2] = vmulq_f32(vmulq_f32(code_diff_vec.val[2], inv255), diff_vec.val[2]);
 
-        // Compute squared distance
-        sum = vfmaq_f32(sum, scaled_diff_0, scaled_diff_0);
-        sum = vfmaq_f32(sum, scaled_diff_1, scaled_diff_1);
-        sum = vfmaq_f32(sum, scaled_diff_2, scaled_diff_2);
-        sum = vfmaq_f32(sum, scaled_diff_3, scaled_diff_3);
+        // Compute squared distance and accumulate
+        sum = vfmaq_f32(sum, scaled_diff_vec.val[0], scaled_diff_vec.val[0]);
+        sum = vfmaq_f32(sum, scaled_diff_vec.val[1], scaled_diff_vec.val[1]);
+        sum = vfmaq_f32(sum, scaled_diff_vec.val[2], scaled_diff_vec.val[2]);
     }
 
-    // Process remaining elements in chunks of 4
-    for (; i + 3 < dim; i += 4) {
+    // Process remaining elements with optimized NEON instructions
+    uint64_t d = dim - i;
+    
+    // Process 8 elements if remaining
+    if (d >= 8) {
+        // Load 8 codes and compute difference at integer level
+        uint8x8_t codes1_vec = vld1_u8(codes1 + i);
+        uint8x8_t codes2_vec = vld1_u8(codes2 + i);
+
+        // Compute code difference at integer level
+        int16x8_t diff_codes = vreinterpretq_s16_u16(vsubl_u8(codes1_vec, codes2_vec));
+        
+        // Convert to float32x4x2_t
+        float32x4x2_t code_diff_vec;
+        code_diff_vec.val[0] = vcvtq_f32_s32(vmovl_s16(vget_low_s16(diff_codes)));
+        code_diff_vec.val[1] = vcvtq_f32_s32(vmovl_s16(vget_high_s16(diff_codes)));
+        
+        // Load 8 diff values
+        float32x4x2_t diff_vec = vld1q_f32_x2(diff + i);
+        
+        // Compute scaled distance: (code_diff / 255) * diff
+        float32x4x2_t scaled_diff_vec;
+        scaled_diff_vec.val[0] = vmulq_f32(vmulq_f32(code_diff_vec.val[0], inv255), diff_vec.val[0]);
+        scaled_diff_vec.val[1] = vmulq_f32(vmulq_f32(code_diff_vec.val[1], inv255), diff_vec.val[1]);
+
+        // Compute squared distance and accumulate
+        sum = vfmaq_f32(sum, scaled_diff_vec.val[0], scaled_diff_vec.val[0]);
+        sum = vfmaq_f32(sum, scaled_diff_vec.val[1], scaled_diff_vec.val[1]);
+        i += 8;
+        d -= 8;
+    }
+
+    // Process 4 elements if remaining
+    if (d >= 4) {
         float32x4_t code1_floats = load_4_uint8_to_float(codes1 + i);
         float32x4_t code2_floats = load_4_uint8_to_float(codes2 + i);
-        float32x4_t diff_values = vld1q_f32(diff + i);
-        float32x4_t lower_bound_values = vld1q_f32(lower_bound + i);
+        float32x4_t diff_vec = vld1q_f32(diff + i);
+        float32x4_t lower_bound_vec = vld1q_f32(lower_bound + i);
 
-        float32x4_t normalized1 = vmulq_f32(code1_floats, inv255);
-        float32x4_t normalized2 = vmulq_f32(code2_floats, inv255);
-
-        float32x4_t adjusted1 = vfmaq_f32(lower_bound_values, normalized1, diff_values);
-        float32x4_t adjusted2 = vfmaq_f32(lower_bound_values, normalized2, diff_values);
-
+        float32x4_t adjusted1 = vfmaq_f32(lower_bound_vec, vmulq_f32(code1_floats, inv255), diff_vec);
+        float32x4_t adjusted2 = vfmaq_f32(lower_bound_vec, vmulq_f32(code2_floats, inv255), diff_vec);
+        float32x4_t dist = vsubq_f32(adjusted1, adjusted2);
+        sum = vfmaq_f32(sum, dist, dist);
+        i += 4;
+        d -= 4;
+    }
+    
+    // Process remaining 1-3 elements
+    float32x4_t res_codes1 = vdupq_n_f32(0.0f);
+    float32x4_t res_codes2 = vdupq_n_f32(0.0f);
+    float32x4_t res_diff = vdupq_n_f32(0.0f);
+    float32x4_t res_lower_bound = vdupq_n_f32(0.0f);
+    
+    if (d >= 3) {
+        res_codes1 = vsetq_lane_f32(codes1[i], res_codes1, 2);
+        res_codes2 = vsetq_lane_f32(codes2[i], res_codes2, 2);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 2);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 2);
+        i++; d--;
+    }
+    
+    if (d >= 2) {
+        res_codes1 = vsetq_lane_f32(codes1[i], res_codes1, 1);
+        res_codes2 = vsetq_lane_f32(codes2[i], res_codes2, 1);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 1);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 1);
+        i++; d--;
+    }
+    
+    if (d >= 1) {
+        res_codes1 = vsetq_lane_f32(codes1[i], res_codes1, 0);
+        res_codes2 = vsetq_lane_f32(codes2[i], res_codes2, 0);
+        res_diff = vld1q_lane_f32(diff + i, res_diff, 0);
+        res_lower_bound = vld1q_lane_f32(lower_bound + i, res_lower_bound, 0);
+    }
+    
+    if (dim > i) {
+        float32x4_t adjusted1 = vfmaq_f32(res_lower_bound, vmulq_f32(res_codes1, inv255), res_diff);
+        float32x4_t adjusted2 = vfmaq_f32(res_lower_bound, vmulq_f32(res_codes2, inv255), res_diff);
         float32x4_t dist = vsubq_f32(adjusted1, adjusted2);
         sum = vfmaq_f32(sum, dist, dist);
     }
 
-    float result = vaddvq_f32(sum);
-    if (i < dim) {
-        result += generic::SQ8ComputeCodesL2Sqr(codes1 + i, codes2 + i, lower_bound + i, diff + i, dim - i);
-    }
-    return result;
+    return vaddvq_f32(sum);
 #else
     return generic::SQ8ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -1300,7 +1475,6 @@ SQ8UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t 
         codes2 += 4;
         d -= 4;
     }
-
     int32_t rem_sum = 0;
     for (size_t i = 0; i < d; ++i) {
         rem_sum += static_cast<int32_t>(codes1[i]) * static_cast<int32_t>(codes2[i]);
@@ -1362,7 +1536,9 @@ shuffle_16_char(const uint8x16_t* a, const uint8x16_t* b) {
 
 void
 Prefetch(const void* data) {
-    return generic::Prefetch(data);
+// #if defined(ENABLE_NEON)
+//     __builtin_prefetch(data, 0, 1);
+// #endif
 };
 
 void
