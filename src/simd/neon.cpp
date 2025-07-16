@@ -1487,10 +1487,198 @@ SQ8UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t 
 #endif
 }
 
+#if defined(ENABLE_NEON)
+__inline void __attribute__((__always_inline__)) 
+extract_12_bits_to_mask(const uint8_t* bits, size_t bit_offset, uint32x4_t& mask0, uint32x4_t& mask1, uint32x4_t& mask2) {
+    size_t byte_idx = bit_offset / 8;
+    size_t bit_start = bit_offset % 8;
+    
+    uint32_t mask_bits;
+    if (bit_start <= 4) {
+        // 12 bits span at most 2 bytes
+        mask_bits = (bits[byte_idx] >> bit_start) | ((uint32_t)bits[byte_idx + 1] << (8 - bit_start));
+    } else {
+        // 12 bits span 3 bytes
+        mask_bits = (bits[byte_idx] >> bit_start) | 
+                   ((uint32_t)bits[byte_idx + 1] << (8 - bit_start)) |
+                   ((uint32_t)bits[byte_idx + 2] << (16 - bit_start));
+    }
+    mask_bits &= 0xFFF; // Keep only 12 bits
+    
+    // Create mask vectors for 12 elements (4+4+4)
+    mask0 = (uint32x4_t){
+        (mask_bits & 0x001) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x002) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x004) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x008) ? 0xFFFFFFFF : 0
+    };
+    mask1 = (uint32x4_t){
+        (mask_bits & 0x010) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x020) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x040) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x080) ? 0xFFFFFFFF : 0
+    };
+    mask2 = (uint32x4_t){
+        (mask_bits & 0x100) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x200) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x400) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x800) ? 0xFFFFFFFF : 0
+    };
+}
+
+__inline void __attribute__((__always_inline__)) 
+extract_8_bits_to_mask(const uint8_t* bits, size_t bit_offset, uint32x4_t& mask0, uint32x4_t& mask1) {
+    size_t byte_idx = bit_offset / 8;
+    size_t bit_start = bit_offset % 8;
+    
+    uint16_t mask_bits;
+    if (bit_start == 0) {
+        mask_bits = bits[byte_idx];
+    } else {
+        mask_bits = (bits[byte_idx] >> bit_start) | ((uint16_t)bits[byte_idx + 1] << (8 - bit_start));
+    }
+    mask_bits &= 0xFF; // Keep only 8 bits
+    
+    // Create mask vectors for 8 elements (4+4)
+    mask0 = (uint32x4_t){
+        (mask_bits & 0x01) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x02) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x04) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x08) ? 0xFFFFFFFF : 0
+    };
+    mask1 = (uint32x4_t){
+        (mask_bits & 0x10) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x20) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x40) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x80) ? 0xFFFFFFFF : 0
+    };
+}
+
+__inline uint32x4_t __attribute__((__always_inline__))
+extract_4_bits_to_mask(const uint8_t* bits, size_t bit_offset) {
+    size_t byte_idx = bit_offset / 8;
+    size_t bit_start = bit_offset % 8;
+    
+    uint8_t mask_bits;
+    if (bit_start <= 4) {
+        mask_bits = (bits[byte_idx] >> bit_start) & 0xF;
+    } else {
+        mask_bits = ((bits[byte_idx] >> bit_start) | (bits[byte_idx + 1] << (8 - bit_start))) & 0xF;
+    }
+    
+    return (uint32x4_t){
+        (mask_bits & 0x1) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x2) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x4) ? 0xFFFFFFFF : 0,
+        (mask_bits & 0x8) ? 0xFFFFFFFF : 0
+    };
+}
+#endif
+
 float
 RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, float inv_sqrt_d) {
 #if defined(ENABLE_NEON)
-    return generic::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);  // TODO(zxy): implement
+    if (dim == 0) {
+        return 0.0f;
+    }
+
+    if (dim < 4) {
+        return generic::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
+    }
+
+    uint64_t d = 0;
+    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t inv_sqrt_d_vec = vdupq_n_f32(inv_sqrt_d);
+    const float32x4_t neg_inv_sqrt_d_vec = vdupq_n_f32(-inv_sqrt_d);
+
+    // Process 12 elements at a time for optimal instruction usage
+    for (; d + 11 < dim; d += 12) {
+        __builtin_prefetch(vector + d + 24, 0, 1);
+        
+        // Load 12 float elements using x3 intrinsics
+        float32x4x3_t vec_values = vld1q_f32_x3(vector + d);
+        
+        // Extract 12 bits and create mask vectors
+        uint32x4_t bit_mask0, bit_mask1, bit_mask2;
+        extract_12_bits_to_mask(bits, d, bit_mask0, bit_mask1, bit_mask2);
+        
+        // Create conditional selection vectors for all 12 elements
+        float32x4x3_t b_vec;
+        b_vec.val[0] = vbslq_f32(bit_mask0, inv_sqrt_d_vec, neg_inv_sqrt_d_vec);
+        b_vec.val[1] = vbslq_f32(bit_mask1, inv_sqrt_d_vec, neg_inv_sqrt_d_vec);
+        b_vec.val[2] = vbslq_f32(bit_mask2, inv_sqrt_d_vec, neg_inv_sqrt_d_vec);
+        
+        // Fused multiply-accumulate for all 12 elements
+        sum = vfmaq_f32(sum, b_vec.val[0], vec_values.val[0]);
+        sum = vfmaq_f32(sum, b_vec.val[1], vec_values.val[1]);
+        sum = vfmaq_f32(sum, b_vec.val[2], vec_values.val[2]);
+    }
+
+    // Process remaining elements with optimized NEON instructions
+    uint64_t remaining = dim - d;
+    
+    // Process 8 elements if remaining
+    if (remaining >= 8) {
+        float32x4x2_t vec_values = vld1q_f32_x2(vector + d);
+        
+        uint32x4_t bit_mask0, bit_mask1;
+        extract_8_bits_to_mask(bits, d, bit_mask0, bit_mask1);
+        
+        float32x4x2_t b_vec;
+        b_vec.val[0] = vbslq_f32(bit_mask0, inv_sqrt_d_vec, neg_inv_sqrt_d_vec);
+        b_vec.val[1] = vbslq_f32(bit_mask1, inv_sqrt_d_vec, neg_inv_sqrt_d_vec);
+        
+        sum = vfmaq_f32(sum, b_vec.val[0], vec_values.val[0]);
+        sum = vfmaq_f32(sum, b_vec.val[1], vec_values.val[1]);
+        d += 8;
+        remaining -= 8;
+    }
+
+    // Process 4 elements if remaining
+    if (remaining >= 4) {
+        float32x4_t vec_values = vld1q_f32(vector + d);
+        uint32x4_t bit_mask = extract_4_bits_to_mask(bits, d);
+        float32x4_t b_vec = vbslq_f32(bit_mask, inv_sqrt_d_vec, neg_inv_sqrt_d_vec);
+        sum = vfmaq_f32(sum, b_vec, vec_values);
+        d += 4;
+        remaining -= 4;
+    }
+
+    // Process remaining 1-3 elements
+    float32x4_t res_vec = vdupq_n_f32(0.0f);
+    float32x4_t res_b = vdupq_n_f32(0.0f);
+    
+    if (remaining >= 3) {
+        res_vec = vld1q_lane_f32(vector + d, res_vec, 2);
+        size_t byte_idx = d / 8;
+        size_t bit_idx = d % 8;
+        bool bit_set = (bits[byte_idx] & (1 << bit_idx)) != 0;
+        res_b = vsetq_lane_f32(bit_set ? inv_sqrt_d : -inv_sqrt_d, res_b, 2);
+        d++; remaining--;
+    }
+    
+    if (remaining >= 2) {
+        res_vec = vld1q_lane_f32(vector + d, res_vec, 1);
+        size_t byte_idx = d / 8;
+        size_t bit_idx = d % 8;
+        bool bit_set = (bits[byte_idx] & (1 << bit_idx)) != 0;
+        res_b = vsetq_lane_f32(bit_set ? inv_sqrt_d : -inv_sqrt_d, res_b, 1);
+        d++; remaining--;
+    }
+    
+    if (remaining >= 1) {
+        res_vec = vld1q_lane_f32(vector + d, res_vec, 0);
+        size_t byte_idx = d / 8;
+        size_t bit_idx = d % 8;
+        bool bit_set = (bits[byte_idx] & (1 << bit_idx)) != 0;
+        res_b = vsetq_lane_f32(bit_set ? inv_sqrt_d : -inv_sqrt_d, res_b, 0);
+    }
+    
+    if (dim > d) {
+        sum = vfmaq_f32(sum, res_b, res_vec);
+    }
+
+    return vaddvq_f32(sum);
 #else
     return generic::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
 #endif
