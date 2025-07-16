@@ -781,7 +781,8 @@ FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 }
 
 #if defined(ENABLE_NEON)
-__inline float32x4_t __attribute__((__always_inline__)) load_4_uint8_to_float(const uint8_t* data) {
+__inline float32x4_t __attribute__((__always_inline__))
+load_4_uint8_to_float(const uint8_t* data) {
     uint32x4_t code_values = {data[0], data[1], data[2], data[3]};
     return vcvtq_f32_u32(code_values);
 }
@@ -815,8 +816,8 @@ __inline void __attribute__((__always_inline__)) load_16_uint8_to_float(
 
 __inline void __attribute__((__always_inline__)) load_12_uint8_to_float(
     const uint8_t* data, float32x4_t& f0, float32x4_t& f1, float32x4_t& f2) {
-    // Load 12 bytes efficiently
-    uint8x8_t code_low = vld1_u8(data);        // Load first 8 bytes
+    // Load 12 bytes
+    uint8x8_t code_low = vld1_u8(data);                             // Load first 8 bytes
     uint32x4_t code_last = {data[8], data[9], data[10], data[11]};  // Load last 4 bytes
     
     uint16x8_t code_16 = vmovl_u8(code_low);
@@ -840,7 +841,6 @@ SQ8ComputeIP(const float* RESTRICT query,
     float32x4_t sum = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    // Process 12 elements at a time for optimal instruction usage
     for (; i + 11 < dim; i += 12) {
         __builtin_prefetch(codes + i + 48, 0, 1);
         __builtin_prefetch(query + i + 24, 0, 1);
@@ -849,7 +849,6 @@ SQ8ComputeIP(const float* RESTRICT query,
         float32x4_t code_floats_0, code_floats_1, code_floats_2;
         load_12_uint8_to_float(codes + i, code_floats_0, code_floats_1, code_floats_2);
 
-        // Load 12 elements each using x3 intrinsics
         float32x4x3_t query_vec = vld1q_f32_x3(query + i);
         float32x4x3_t diff_vec = vld1q_f32_x3(diff + i);
         float32x4x3_t lower_bound_vec = vld1q_f32_x3(lower_bound + i);
@@ -866,10 +865,8 @@ SQ8ComputeIP(const float* RESTRICT query,
         sum = vfmaq_f32(sum, query_vec.val[2], adjusted_vec.val[2]);
     }
 
-    // Process remaining elements with optimized NEON instructions
     uint64_t d = dim - i;
     
-    // Process 8 elements if remaining
     if (d >= 8) {
         float32x4_t code_floats_low, code_floats_high;
         load_8_uint8_to_float(codes + i, code_floats_low, code_floats_high);
@@ -888,7 +885,6 @@ SQ8ComputeIP(const float* RESTRICT query,
         d -= 8;
     }
 
-    // Process 4 elements if remaining
     if (d >= 4) {
         float32x4_t code_floats = load_4_uint8_to_float(codes + i);
         float32x4_t query_vec = vld1q_f32(query + i);
@@ -900,8 +896,7 @@ SQ8ComputeIP(const float* RESTRICT query,
         i += 4;
         d -= 4;
     }
-    
-    // Process remaining 1-3 elements
+
     float32x4_t res_query = vdupq_n_f32(0.0f);
     float32x4_t res_codes = vdupq_n_f32(0.0f);
     float32x4_t res_diff = vdupq_n_f32(0.0f);
@@ -952,7 +947,6 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
     float32x4_t sum = vdupq_n_f32(0.0f);
     uint64_t i = 0;
 
-    // Process 12 elements at a time for optimal instruction usage
     for (; i + 11 < dim; i += 12) {
         __builtin_prefetch(codes + i + 48, 0, 1);
         __builtin_prefetch(query + i + 24, 0, 1);
@@ -961,7 +955,6 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
         float32x4_t code_floats_0, code_floats_1, code_floats_2;
         load_12_uint8_to_float(codes + i, code_floats_0, code_floats_1, code_floats_2);
 
-        // Load 12 elements each using x3 intrinsics
         float32x4x3_t query_vec = vld1q_f32_x3(query + i);
         float32x4x3_t diff_vec = vld1q_f32_x3(diff + i);
         float32x4x3_t lower_bound_vec = vld1q_f32_x3(lower_bound + i);
@@ -978,10 +971,8 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
         sum = vfmaq_f32(sum, dist_vec.val[2], dist_vec.val[2]);
     }
 
-    // Process remaining elements with optimized NEON instructions
     uint64_t d = dim - i;
     
-    // Process 8 elements if remaining
     if (d >= 8) {
         float32x4_t code_floats_low, code_floats_high;
         load_8_uint8_to_float(codes + i, code_floats_low, code_floats_high);
@@ -1004,7 +995,6 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
         d -= 8;
     }
 
-    // Process 4 elements if remaining
     if (d >= 4) {
         float32x4_t code_floats = load_4_uint8_to_float(codes + i);
         float32x4_t query_vec = vld1q_f32(query + i);
@@ -1018,7 +1008,6 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
         d -= 4;
     }
     
-    // Process remaining 1-3 elements
     float32x4_t res_query = vdupq_n_f32(0.0f);
     float32x4_t res_codes = vdupq_n_f32(0.0f);
     float32x4_t res_diff = vdupq_n_f32(0.0f);
@@ -1591,11 +1580,9 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
     const float32x4_t inv_sqrt_d_vec = vdupq_n_f32(inv_sqrt_d);
     const float32x4_t neg_inv_sqrt_d_vec = vdupq_n_f32(-inv_sqrt_d);
 
-    // Process 12 elements at a time for optimal instruction usage
     for (; d + 11 < dim; d += 12) {
         __builtin_prefetch(vector + d + 24, 0, 1);
         
-        // Load 12 float elements using x3 intrinsics
         float32x4x3_t vec_values = vld1q_f32_x3(vector + d);
         
         // Extract 12 bits and create mask vectors
@@ -1614,10 +1601,8 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
         sum = vfmaq_f32(sum, b_vec.val[2], vec_values.val[2]);
     }
 
-    // Process remaining elements with optimized NEON instructions
     uint64_t remaining = dim - d;
     
-    // Process 8 elements if remaining
     if (remaining >= 8) {
         float32x4x2_t vec_values = vld1q_f32_x2(vector + d);
         
@@ -1634,7 +1619,6 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
         remaining -= 8;
     }
 
-    // Process 4 elements if remaining
     if (remaining >= 4) {
         float32x4_t vec_values = vld1q_f32(vector + d);
         uint32x4_t bit_mask = extract_4_bits_to_mask(bits, d);
@@ -1644,7 +1628,6 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
         remaining -= 4;
     }
 
-    // Process remaining 1-3 elements
     float32x4_t res_vec = vdupq_n_f32(0.0f);
     float32x4_t res_b = vdupq_n_f32(0.0f);
     
@@ -1724,9 +1707,9 @@ shuffle_16_char(const uint8x16_t* a, const uint8x16_t* b) {
 
 void
 Prefetch(const void* data) {
-// #if defined(ENABLE_NEON)
-//     __builtin_prefetch(data, 0, 1);
-// #endif
+#if defined(ENABLE_NEON)
+    __builtin_prefetch(data, 0, 3);
+#endif
 };
 
 void
